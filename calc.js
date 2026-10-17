@@ -33,7 +33,7 @@
   }
 
   /* คำนวณ 1 สินค้า x 1 ช่องทาง
-   * product  = { cost, shipping, box, staff?, ads?, other?, extras?: [{name, amt}], prices: {ch: n}, actual?: {ch: n} }
+   * product  = { cost, shipping, box, staff?, ads?, other?, extras?: [{name, amt}], prices: {ch: n}, actual?: {ch: n}, sold?: {ch: จำนวนชิ้น} }
    * channel  = { id, gp }   (gp เป็น % ของราคาขาย)
    * settings = { vatOn, monthlyUnits, staff, ads, other }
    * คืน null ถ้าสินค้านี้ไม่ได้ขายช่องทางนั้น (ไม่มีทั้งราคาตั้งและราคาขายจริง) */
@@ -59,6 +59,9 @@
     var profit = price - vat - gpFee - costs;
     var denom = 1 - vatRate - gpRate;
 
+    // ขายได้กี่ชิ้น (ไม่บังคับ): ถ้ามี คำนวณยอดขายรวมและกำไรรวม (กำไรต่อชิ้น x จำนวน) ถ้าไม่มี = null ไม่เดาจำนวน
+    var qty = product.sold && product.sold[channel.id] !== undefined && product.sold[channel.id] !== null ? product.sold[channel.id] : null;
+
     return {
       channelId: channel.id,
       gp: channel.gp, vatOn: !!settings.vatOn,
@@ -67,7 +70,10 @@
       cost: product.cost, shipping: shipping, box: box, staff: staff, ads: ads, other: other, extras: extras,
       costs: costs, vat: vat, gpFee: gpFee, profit: profit,
       margin: price > 0 ? profit / price * 100 : 0,
-      breakEven: denom > 0 ? costs / denom : null // null = คำนวณไม่ได้ ตรวจค่า GP
+      breakEven: denom > 0 ? costs / denom : null, // null = คำนวณไม่ได้ ตรวจค่า GP
+      qty: qty,
+      revenue: qty === null ? null : price * qty,
+      totalProfit: qty === null ? null : profit * qty
     };
   }
 
@@ -91,12 +97,15 @@
   /* สรุปสำหรับแดชบอร์ด จากรายการผลลัพธ์ (1 รายการ = สินค้า 1 ตัว x ช่องทาง 1 ช่อง) */
   function summarize(results, thin) {
     var n = results.length, sumP = 0, sumM = 0, loss = 0, thinCount = 0;
+    var sales = { rows: 0, qty: 0, revenue: 0, profit: 0, margin: 0 }; // รวมเฉพาะรายการที่ใส่จำนวนที่ขายได้
     results.forEach(function (r) {
       sumP += r.profit; sumM += r.margin;
       var s = status(r, thin);
       if (s === 'loss') loss++; else if (s === 'thin') thinCount++;
+      if (r.qty !== null && r.qty !== undefined) { sales.rows++; sales.qty += r.qty; sales.revenue += r.revenue; sales.profit += r.totalProfit; }
     });
-    return { count: n, avgProfit: n ? sumP / n : 0, avgMargin: n ? sumM / n : 0, lossCount: loss, thinCount: thinCount };
+    sales.margin = sales.revenue > 0 ? sales.profit / sales.revenue * 100 : 0; // ถ่วงน้ำหนักตามยอดขาย ไม่ใช่เฉลี่ยตรง ๆ
+    return { count: n, avgProfit: n ? sumP / n : 0, avgMargin: n ? sumM / n : 0, lossCount: loss, thinCount: thinCount, sales: sales };
   }
 
   /* แจกแจงว่าราคาขาย 1 ชิ้นไปอยู่ที่ไหน: คืนรายการ { key, label, amount } เรียงต้นทุน -> ค่าธรรมเนียม -> VAT

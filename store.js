@@ -52,7 +52,7 @@
       if (!p.extras.every(function (e) { return e && typeof e.name === 'string' && isNum(e.amt); })) return false;
     }
     if (p.note !== undefined && typeof p.note !== 'string') return false;
-    return isMoneyMap(p.prices, ids) && isMoneyMap(p.actual, ids);
+    return isMoneyMap(p.prices, ids) && isMoneyMap(p.actual, ids) && isMoneyMap(p.sold, ids);
   }
 
   /* โครงข้อมูลที่อ่านมาใช้ได้ไหม (กันไฟล์เสีย/ถูกแก้มือ/เวอร์ชันอื่น) */
@@ -116,7 +116,7 @@
   /* ช่องทางนี้มีสินค้าใช้ราคาอยู่ไหม (ไว้เตือนก่อนลบ) */
   function channelInUse(data, id) {
     return data.products.some(function (p) {
-      return (p.prices && p.prices[id] !== undefined) || (p.actual && p.actual[id] !== undefined);
+      return (p.prices && p.prices[id] !== undefined) || (p.actual && p.actual[id] !== undefined) || (p.sold && p.sold[id] !== undefined);
     });
   }
 
@@ -140,7 +140,7 @@
       return out;
     }
     return Object.assign({}, data, { products: data.products.map(function (p) {
-      var q = Object.assign({}, p); q.prices = keep(p.prices); if (p.actual) q.actual = keep(p.actual); return q;
+      var q = Object.assign({}, p); q.prices = keep(p.prices); if (p.actual) q.actual = keep(p.actual); if (p.sold) q.sold = keep(p.sold); return q;
     }) });
   }
 
@@ -210,8 +210,8 @@
 
   /* ---------- ฟอร์มสินค้า ---------- */
   function blankProductForm(channels) {
-    var f = { id: null, name: '', note: '', cost: '', shipping: '', box: '', staff: '', ads: '', other: '', extras: [], prices: {}, actual: {} };
-    channels.forEach(function (c) { f.prices[c.id] = ''; f.actual[c.id] = ''; });
+    var f = { id: null, name: '', note: '', cost: '', shipping: '', box: '', staff: '', ads: '', other: '', extras: [], prices: {}, actual: {}, sold: {} };
+    channels.forEach(function (c) { f.prices[c.id] = ''; f.actual[c.id] = ''; f.sold[c.id] = ''; });
     return f;
   }
   function productToForm(p, channels) {
@@ -223,6 +223,7 @@
     channels.forEach(function (c) {
       if (p.prices && p.prices[c.id] !== undefined) f.prices[c.id] = String(p.prices[c.id]);
       if (p.actual && p.actual[c.id] !== undefined) f.actual[c.id] = String(p.actual[c.id]);
+      if (p.sold && p.sold[c.id] !== undefined) f.sold[c.id] = String(p.sold[c.id]);
     });
     return f;
   }
@@ -259,15 +260,22 @@
     });
     if (extras.length) clean.extras = extras;
 
-    var prices = {}, actual = {};
+    var prices = {}, actual = {}, sold = {};
     channels.forEach(function (c) {
-      var p = P(form.prices[c.id]), a = P(form.actual[c.id]);
+      var p = P(form.prices[c.id]), a = P(form.actual[c.id]), s = P(form.sold ? form.sold[c.id] : '');
       if (Number.isNaN(p)) errors['p.' + c.id] = MONEY_ERR; else if (p !== null) prices[c.id] = p;
       if (Number.isNaN(a)) errors['a.' + c.id] = MONEY_ERR; else if (a !== null) actual[c.id] = a;
+      if (Number.isNaN(s)) errors['s.' + c.id] = MONEY_ERR;
+      else if (s !== null) {
+        // จำนวนที่ขายได้ ต้องมีราคาของช่องทางนั้นก่อน ไม่งั้นคำนวณยอดขายไม่ได้
+        if (prices[c.id] === undefined && actual[c.id] === undefined && !errors['p.' + c.id] && !errors['a.' + c.id]) errors['s.' + c.id] = 'ใส่ราคาขายของช่องทางนี้ก่อน';
+        else sold[c.id] = s;
+      }
     });
     if (!Object.keys(prices).length && !Object.keys(actual).length) errors.prices = 'ใส่ราคาอย่างน้อย 1 ช่องทาง';
     clean.prices = prices;
     if (Object.keys(actual).length) clean.actual = actual;
+    if (Object.keys(sold).length) clean.sold = sold;
     var note = String(form.note || '').trim();
     if (note) clean.note = note;
 

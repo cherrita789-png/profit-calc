@@ -7,6 +7,7 @@
   var money = function (n) { return (n < 0 ? '-' : '') + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
   var pct = function (n) { return (n < 0 ? '-' : '') + Math.abs(n).toFixed(2) + '%'; };
   var cls = function (n) { return n < 0 ? 'neg' : ''; };
+  var qf = function (n) { return n.toLocaleString('en-US', { maximumFractionDigits: 2 }); };
   var $ = function (id) { return document.getElementById(id); };
   var disc = function (r) { return r.list ? (r.price < r.list ? 'ลด ' : 'สูงกว่า ') + Math.abs((r.list - r.price) / r.list * 100).toFixed(0) + '%' : ''; };
 
@@ -17,7 +18,7 @@
     back: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>'
   };
   var NAV = [['dash', 'แดชบอร์ด', 'ภาพรวมกำไรทุกสินค้า'], ['add', 'เพิ่มสินค้า', 'กรอก หรือวางข้อความจาก Line'], ['set', 'ตั้งค่า', 'GP, VAT, พนักงาน, แอด, สำรองข้อมูล']];
-  var FIELD_LABEL = { name: 'ชื่อสินค้า', cost: 'ต้นทุน', shipping: 'ค่าขนส่ง', box: 'ค่ากล่อง', sale: 'ราคาตั้ง', actual: 'ราคาขายจริง', ads: 'ค่าแอด', staff: 'ค่าพนักงาน' };
+  var FIELD_LABEL = { name: 'ชื่อสินค้า', cost: 'ต้นทุน', shipping: 'ค่าขนส่ง', box: 'ค่ากล่อง', sale: 'ราคาตั้ง', actual: 'ราคาขายจริง', ads: 'ค่าแอด', staff: 'ค่าพนักงาน', sold: 'ขายได้ (ชิ้น)' };
 
   /* โหมดทดลอง (showcase.html): ใช้ข้อมูลสมมติที่หน้าเว็บส่งมาใน window.COSTCALC_DEMO เก็บในหน่วยความจำ ไม่แตะ localStorage จริง */
   var demo = window.COSTCALC_DEMO || null;
@@ -103,25 +104,38 @@
     d.products.forEach(function (p) { d.channels.forEach(function (c) { var r = calcFor(p, c); if (r) all.push({ p: p, ch: c, r: r }); }); });
     var sum = Calc.summarize(all.map(function (x) { return x.r; }), d.settings.thinMargin);
     var list = all.filter(function (x) { return (f.ch === 'all' || x.ch.id === f.ch) && (!f.loss || x.r.profit < 0); });
-    list.sort(function (a, b) { return (f.sort === 'desc' ? b.r.profit - a.r.profit : a.r.profit - b.r.profit) || a.p.name.localeCompare(b.p.name); });
+    list.sort(function (a, b) {
+      if (f.sort === 'tdesc') { // กำไรรวมมาก ไป น้อย รายการที่ไม่ได้ใส่จำนวนไปท้ายสุด
+        var ta = a.r.totalProfit === null ? -Infinity : a.r.totalProfit, tb = b.r.totalProfit === null ? -Infinity : b.r.totalProfit;
+        if (ta !== tb) return tb > ta ? 1 : -1;
+        return a.p.name.localeCompare(b.p.name);
+      }
+      return (f.sort === 'desc' ? b.r.profit - a.r.profit : a.r.profit - b.r.profit) || a.p.name.localeCompare(b.p.name);
+    });
     var noPrice = d.products.filter(function (p) { return !results(p).length; });
+    var sl = sum.sales;
+    var salesCards = sl.rows ? '<div class="stat"><div class="t">ยอดขายรวม (บาท)</div><div class="v num">' + money(sl.revenue) + '</div><div class="small muted">ขายได้ ' + qf(sl.qty) + ' ชิ้น จาก ' + sl.rows + ' รายการ</div></div>' +
+      '<div class="stat"><div class="t">กำไรรวม (บาท)</div><div class="v num ' + cls(sl.profit) + '">' + money(sl.profit) + '</div><div class="small muted">' + pct(sl.margin) + ' ของยอดขาย</div></div>' : '';
+    var salesHint = sl.rows ? '' : '<div class="hint">ใส่ "ขายได้กี่ชิ้น" ในฟอร์มสินค้าแต่ละตัว เพื่อดูยอดขายรวมและกำไรรวมที่นี่</div>';
     return head + '<div class="pagehead"><h1>แดชบอร์ด</h1><div class="sp"><a class="btn btn-sm" href="#add">เพิ่มสินค้า</a></div></div>' +
       '<div class="cards">' +
       '<div class="stat"><div class="t">สินค้าทั้งหมด</div><div class="v num">' + d.products.length + '</div></div>' +
       '<div class="stat"><div class="t">กำไรเฉลี่ยต่อชิ้น</div><div class="v num ' + cls(sum.avgProfit) + '">' + money(sum.avgProfit) + '</div></div>' +
       '<div class="stat"><div class="t">% กำไรเฉลี่ย</div><div class="v num ' + cls(sum.avgMargin) + '">' + pct(sum.avgMargin) + '</div></div>' +
-      '<div class="stat"><div class="t">รายการที่ขาดทุน</div><div class="v num ' + (sum.lossCount ? 'neg' : '') + '">' + sum.lossCount + ' <span class="small muted" style="font-weight:400">จาก ' + sum.count + '</span></div></div></div>' +
+      '<div class="stat"><div class="t">รายการที่ขาดทุน</div><div class="v num ' + (sum.lossCount ? 'neg' : '') + '">' + sum.lossCount + ' <span class="small muted" style="font-weight:400">จาก ' + sum.count + '</span></div></div>' + salesCards + '</div>' + salesHint +
       '<div class="filters"><select data-fil="ch" aria-label="กรองช่องทาง"><option value="all">ทุกช่องทาง</option>' +
       d.channels.map(function (c) { return '<option value="' + esc(c.id) + '"' + (f.ch === c.id ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('') + '</select>' +
-      '<select data-fil="sort" aria-label="เรียงลำดับ"><option value="desc"' + (f.sort === 'desc' ? ' selected' : '') + '>กำไรมาก ไป น้อย</option><option value="asc"' + (f.sort === 'asc' ? ' selected' : '') + '>กำไรน้อย ไป มาก</option></select>' +
+      '<select data-fil="sort" aria-label="เรียงลำดับ"><option value="desc"' + (f.sort === 'desc' ? ' selected' : '') + '>กำไรต่อชิ้น มาก ไป น้อย</option><option value="asc"' + (f.sort === 'asc' ? ' selected' : '') + '>กำไรต่อชิ้น น้อย ไป มาก</option><option value="tdesc"' + (f.sort === 'tdesc' ? ' selected' : '') + '>กำไรรวม มาก ไป น้อย</option></select>' +
       '<label class="ck"><input type="checkbox" data-fil="loss"' + (f.loss ? ' checked' : '') + '> เฉพาะที่ขาดทุน</label></div>' +
-      '<table class="tbl"><thead><tr><th>สินค้า</th><th>ช่องทาง</th><th class="r hm">ราคาขายจริง</th><th class="r hm">ต้นทุนรวม</th><th class="r">กำไร/ชิ้น</th><th class="r">% กำไร</th><th>สถานะ</th></tr></thead><tbody>' +
+      '<table class="tbl"><thead><tr><th>สินค้า</th><th>ช่องทาง</th><th class="r hm">ราคาขายจริง</th><th class="r hm">ต้นทุนรวม</th><th class="r">กำไร/ชิ้น</th><th class="r hm">% กำไร</th><th class="r hm">ขายได้ (ชิ้น)</th><th class="r hm">ยอดขาย</th><th class="r">กำไรรวม</th><th>สถานะ</th></tr></thead><tbody>' +
       (list.length ? list.map(function (x) {
         return '<tr data-go="#p/' + esc(x.p.id) + '/' + esc(x.ch.id) + '"><td><a class="plink" href="#p/' + esc(x.p.id) + '/' + esc(x.ch.id) + '">' + esc(x.p.name) + '</a></td><td>' + esc(x.ch.name) + '</td>' +
           '<td class="r num hm">' + money(x.r.price) + (x.r.list ? '<div class="small muted">ตั้ง ' + money(x.r.list) + ' (' + disc(x.r) + ')</div>' : '') + '</td><td class="r num hm">' + money(x.r.costs) + '</td>' +
-          '<td class="r num ' + cls(x.r.profit) + '"><b>' + money(x.r.profit) + '</b></td><td class="r num ' + cls(x.r.margin) + '">' + pct(x.r.margin) + '</td><td>' + zone(x.r) + '</td></tr>';
-      }).join('') : '<tr><td colspan="7" class="empty">ไม่มีรายการตามตัวกรอง</td></tr>') + '</tbody></table>' +
-      '<p class="small muted" style="margin-top:10px">ต้นทุนรวม = ต้นทุนสินค้า + ขนส่ง + กล่อง + พนักงาน + แอด + อื่น ๆ (ยังไม่รวม GP และ VAT) · กดแถวเพื่อดูรายละเอียด · "กำไรบาง" = % กำไรต่ำกว่า ' + d.settings.thinMargin + '% (ปรับได้ในตั้งค่า)</p>' +
+          '<td class="r num ' + cls(x.r.profit) + '"><b>' + money(x.r.profit) + '</b></td><td class="r num hm ' + cls(x.r.margin) + '">' + pct(x.r.margin) + '</td>' +
+          '<td class="r num hm">' + (x.r.qty === null ? '-' : qf(x.r.qty)) + '</td><td class="r num hm">' + (x.r.revenue === null ? '-' : money(x.r.revenue)) + '</td>' +
+          '<td class="r num ' + (x.r.totalProfit === null ? '' : cls(x.r.totalProfit)) + '">' + (x.r.totalProfit === null ? '<span class="muted">-</span>' : '<b>' + money(x.r.totalProfit) + '</b>') + '</td><td>' + zone(x.r) + '</td></tr>';
+      }).join('') : '<tr><td colspan="10" class="empty">ไม่มีรายการตามตัวกรอง</td></tr>') + '</tbody></table>' +
+      '<p class="small muted" style="margin-top:10px">ต้นทุนรวม = ต้นทุนสินค้า + ขนส่ง + กล่อง + พนักงาน + แอด + อื่น ๆ (ยังไม่รวม GP และ VAT) · กดแถวเพื่อดูรายละเอียด · "กำไรบาง" = % กำไรต่ำกว่า ' + d.settings.thinMargin + '% (ปรับได้ในตั้งค่า) · กำไรรวม = กำไรต่อชิ้น x จำนวนที่ขายได้ (ไม่ได้ใส่จำนวนแสดง -)</p>' +
       (noPrice.length ? '<div class="hint warn" style="margin-top:12px">สินค้าที่ยังไม่มีราคาขายช่องทางไหนเลย (ไม่แสดงในตาราง): ' + noPrice.map(function (p) { return '<a href="#edit/' + esc(p.id) + '">' + esc(p.name) + '</a>'; }).join(', ') + '</div>' : '');
   }
 
@@ -137,6 +151,13 @@
       (p.note ? '<p class="muted" style="margin:-6px 0 12px;font-size:13.5px">' + esc(p.note) + '</p>' : '');
     if (!cur) return head + gpWarn() + '<div class="card"><p class="muted">สินค้านี้ยังไม่มีราคาขายช่องทางไหนเลย</p><p style="margin-top:10px"><a class="btn-primary" style="text-decoration:none;display:inline-flex;width:auto" href="#edit/' + esc(p.id) + '">ใส่ราคาขาย</a></p></div>';
     var r = cur.r;
+    var salesCard = r.qty === null
+      ? '<div class="hint" style="margin-top:16px">ช่องทาง ' + esc(cur.ch.name) + ' ยังไม่ได้ใส่จำนวนที่ขายได้ <a href="#edit/' + esc(p.id) + '">ใส่ในหน้าแก้ไข</a> เพื่อดูยอดขายรวมและกำไรรวม</div>'
+      : '<div class="card" style="margin-top:16px"><h3>ยอดขายรวมของช่องทาง ' + esc(cur.ch.name) + '</h3><div class="kv">' +
+        '<div>ขายได้ (ชิ้น)<b class="num">' + qf(r.qty) + '</b></div><div>ยอดขายรวม<b class="num">' + money(r.revenue) + '</b></div>' +
+        '<div>ต้นทุนรวมทั้งหมด<b class="num">' + money(r.costs * r.qty) + '</b></div><div>ค่า GP รวม<b class="num">' + money(r.gpFee * r.qty) + '</b></div><div>VAT รวม<b class="num">' + money(r.vat * r.qty) + '</b></div>' +
+        '<div>กำไรรวม<b class="num ' + cls(r.totalProfit) + '">' + money(r.totalProfit) + '</b></div></div>' +
+        '<p class="small muted" style="margin-top:8px">ยอดขายรวม = ราคาขายจริง x จำนวน, กำไรรวม = กำไรต่อชิ้น x จำนวน (เปลี่ยนช่องทางที่แท็บด้านบน)</p></div>';
     var bk = Calc.breakdown(r).map(function (x) {
       return '<div class="bk"><span>' + esc(x.label) + '</span><div class="bar"><span style="width:' + Math.min(100, r.price ? x.amount / r.price * 100 : 0) + '%"></span></div><span class="r num">' + money(x.amount) + '</span><span class="pct r num">' + (r.price ? (x.amount / r.price * 100).toFixed(1) : '0.0') + '%</span></div>';
     }).join('') +
@@ -146,15 +167,17 @@
       '<div class="card" style="margin-bottom:16px"><h3>ข้อมูลที่กรอก</h3><div class="kv"><div>ต้นทุนสินค้า<b class="num">' + money(p.cost) + '</b></div><div>ค่าขนส่ง<b class="num">' + money(p.shipping) + '</b></div><div>ค่ากล่อง<b class="num">' + money(p.box) + '</b></div>' +
       '<div>ค่าพนักงาน<b class="num">' + eff('staff', r.staff) + '</b></div><div>ค่าแอด<b class="num">' + eff('ads', r.ads) + '</b></div><div>ค่าอื่น ๆ<b class="num">' + eff('other', r.other) + '</b></div>' +
       (p.extras || []).map(function (e) { return '<div>' + esc(e.name || 'ค่าใช้จ่ายเพิ่มเติม') + '<b class="num">' + money(e.amt) + '</b></div>'; }).join('') + '</div></div>' +
-      '<div class="card" style="margin-bottom:16px"><h3>เทียบทุกช่องทาง</h3><table class="tbl"><thead><tr><th>ช่องทาง</th><th class="r hm">ราคาตั้ง</th><th class="r">ราคาขายจริง</th><th class="r">กำไร/ชิ้น</th><th class="r">% กำไร</th><th class="r hm">ราคาขั้นต่ำที่ไม่ขาดทุน</th><th>สถานะ</th></tr></thead><tbody>' +
+      '<div class="card" style="margin-bottom:16px"><h3>เทียบทุกช่องทาง</h3><table class="tbl"><thead><tr><th>ช่องทาง</th><th class="r hm">ราคาตั้ง</th><th class="r">ราคาขายจริง</th><th class="r">กำไร/ชิ้น</th><th class="r">% กำไร</th><th class="r hm">ราคาขั้นต่ำที่ไม่ขาดทุน</th><th class="r hm">ขายได้ (ชิ้น)</th><th class="r hm">ยอดขาย</th><th class="r hm">กำไรรวม</th><th>สถานะ</th></tr></thead><tbody>' +
       rs.map(function (x) {
         return '<tr><td><b>' + esc(x.ch.name) + '</b></td><td class="r num hm">' + (x.r.list ? money(x.r.list) + ' <span class="small muted">(' + disc(x.r) + ')</span>' : '-') + '</td><td class="r num">' + money(x.r.price) + '</td>' +
           '<td class="r num ' + cls(x.r.profit) + '"><b>' + money(x.r.profit) + '</b></td><td class="r num ' + cls(x.r.margin) + '">' + pct(x.r.margin) + '</td>' +
-          '<td class="r num hm">' + (x.r.breakEven === null ? 'คำนวณไม่ได้ ตรวจค่า GP' : money(x.r.breakEven)) + '</td><td>' + zone(x.r) + '</td></tr>';
+          '<td class="r num hm">' + (x.r.breakEven === null ? 'คำนวณไม่ได้ ตรวจค่า GP' : money(x.r.breakEven)) + '</td>' +
+          '<td class="r num hm">' + (x.r.qty === null ? '-' : qf(x.r.qty)) + '</td><td class="r num hm">' + (x.r.revenue === null ? '-' : money(x.r.revenue)) + '</td>' +
+          '<td class="r num hm ' + (x.r.totalProfit === null ? '' : cls(x.r.totalProfit)) + '">' + (x.r.totalProfit === null ? '-' : money(x.r.totalProfit)) + '</td><td>' + zone(x.r) + '</td></tr>';
       }).join('') + '</tbody></table></div>' +
       '<div class="card"><h3>ราคาขาย 1 ชิ้นไปอยู่ที่ไหนบ้าง</h3><div class="tabs2">' +
       rs.map(function (x) { return '<a class="' + (x.ch.id === cur.ch.id ? 'on' : '') + '" href="#p/' + esc(p.id) + '/' + esc(x.ch.id) + '">' + esc(x.ch.name) + '</a>'; }).join('') + '</div>' + bk +
-      (r.breakEven === null ? '<p class="small neg" style="margin-top:8px">GP + VAT รวมแล้วเกินราคาขาย คำนวณราคาขั้นต่ำไม่ได้ ตรวจค่า GP</p>' : '<p class="small muted" style="margin-top:8px">ราคาขั้นต่ำที่ไม่ขาดทุนของช่องทางนี้: <b class="num">' + money(r.breakEven) + '</b> บาท</p>') + '</div>';
+      (r.breakEven === null ? '<p class="small neg" style="margin-top:8px">GP + VAT รวมแล้วเกินราคาขาย คำนวณราคาขั้นต่ำไม่ได้ ตรวจค่า GP</p>' : '<p class="small muted" style="margin-top:8px">ราคาขั้นต่ำที่ไม่ขาดทุนของช่องทางนี้: <b class="num">' + money(r.breakEven) + '</b> บาท</p>') + '</div>' + salesCard;
   }
 
   /* ---------- ฟอร์มสินค้า ---------- */
@@ -178,7 +201,7 @@
       '<textarea id="paste" rows="3" data-pt placeholder="เช่น เสื้อ A ซื้อ 120 ส่ง 35 กล่อง 8 ขาย 299">' + esc(state.pText) + '</textarea>' +
       '<div class="btn-row" style="margin-top:10px;align-items:center"><button class="btn btn-sm" data-act="parse">แยกตัวเลข</button><span class="small muted">ราคาขายใส่ที่</span>' +
       '<select id="pasteCh" data-pch style="border:1px solid rgb(var(--line)/.16);border-radius:10px;padding:7px;font-size:13px;background:#fff">' + d.channels.map(function (c) { return '<option value="' + esc(c.id) + '"' + (c.id === state.pCh ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('') + '</select></div>' +
-      '<div class="pastemsg" id="pmsg">' + state.pMsg + '</div><div class="small muted" style="margin-top:6px">คำที่เข้าใจ: ซื้อ/ทุน, ส่ง/ขนส่ง, กล่อง/พัสดุ, ขาย/ราคา, ขายจริง, แอด, พนักงาน แยกแล้วเติมลงฟอร์มด้านล่าง ตรวจและแก้ก่อนบันทึกเสมอ</div></div>' +
+      '<div class="pastemsg" id="pmsg">' + state.pMsg + '</div><div class="small muted" style="margin-top:6px">คำที่เข้าใจ: ซื้อ/ทุน, ส่ง/ขนส่ง, กล่อง/พัสดุ, ขาย/ราคา, ขายจริง, ขายได้/ยอดขาย (จำนวนชิ้น), แอด, พนักงาน แยกแล้วเติมลงฟอร์มด้านล่าง ตรวจและแก้ก่อนบันทึกเสมอ</div></div>' +
       '<div class="card"><h3>ข้อมูลสินค้า</h3><label for="f-name">ชื่อสินค้า</label><input id="f-name" data-pf="name" autocomplete="off" value="' + esc(f.name) + '" class="' + (state.miss.name ? 'miss' : '') + '"><div class="fe" data-perr="name"></div>' + (state.miss.name ? '<div class="fn">' + esc(state.miss.name) + '</div>' : '') +
       '<div class="field-row three">' + pfld('cost', 'f-cost', 'ต้นทุนสินค้า (บาท)', f.cost) + pfld('shipping', 'f-ship', 'ค่าขนส่ง (บาท)', f.shipping, '0') + pfld('box', 'f-box', 'ค่ากล่อง (บาท)', f.box, '0') + '</div>' +
       '<label style="margin-top:14px;color:rgb(var(--ink));font-weight:600">ค่าใช้จ่ายอื่นต่อชิ้น <span class="muted" style="font-weight:400">(เว้นว่าง = ใช้ค่ากลางจากตั้งค่า ตัวเลขจางคือค่ากลาง)</span></label>' +
@@ -188,6 +211,8 @@
       '<div class="field-row three" style="margin-top:0">' + d.channels.map(function (c) { return pfld('p.' + c.id, 'f-p-' + c.id, esc(c.name), f.prices[c.id]); }).join('') + '</div>' +
       '<label style="margin-top:14px;color:rgb(var(--ink));font-weight:600">ราคาขายจริงแต่ละช่องทาง <span class="muted" style="font-weight:400">(หลังส่วนลด/โปรโมชัน เว้นว่าง = ใช้ราคาตั้ง)</span></label>' +
       '<div class="field-row three" style="margin-top:0">' + d.channels.map(function (c) { return pfld('a.' + c.id, 'f-a-' + c.id, esc(c.name), f.actual[c.id], 'เท่าราคาตั้ง'); }).join('') + '</div><div class="fe" data-perr="prices"></div>' +
+      '<label style="margin-top:14px;color:rgb(var(--ink));font-weight:600">ขายได้กี่ชิ้น แต่ละช่องทาง <span class="muted" style="font-weight:400">(ไม่บังคับ ใส่แล้วจะเห็นยอดขายรวมและกำไรรวม)</span></label>' +
+      '<div class="field-row three" style="margin-top:0">' + d.channels.map(function (c) { return pfld('s.' + c.id, 'f-s-' + c.id, esc(c.name), f.sold[c.id], 'ไม่ใส่ = ไม่คำนวณยอดรวม'); }).join('') + '</div>' +
       '<label for="f-note" style="margin-top:14px">โน้ต (ไม่บังคับ)</label><input id="f-note" data-pf="note" autocomplete="off" value="' + esc(f.note) + '" placeholder="เช่น ซัพพลายเออร์ สีที่ขาย">' +
       '<label style="margin-top:14px">รูปกระดาษที่จดไว้ (ไว้ดูประกอบตอนกรอก ไม่ถูกบันทึก)</label><div class="imgbox"><input type="file" id="img" accept="image/*"><div id="imgprev">' + (state.img ? '<img src="' + state.img + '" alt="รูปกระดาษที่แนบ">' : '<div style="margin-top:6px">ยังไม่ได้แนบรูป</div>') + '</div><div class="small" style="margin-top:8px">ยังไม่อ่านรูปให้อัตโนมัติ ดูรูปแล้วกรอกเองหรือพิมพ์ข้อความด้านบน</div></div>' +
       '<div class="btn-row"><button class="btn-primary" data-act="saveprod">บันทึกสินค้า</button><a class="btn" href="' + (editing ? '#p/' + esc(f.id) : '#dash') + '">ยกเลิก</a><span id="pflag" style="align-self:center"></span></div></div></div>' +
@@ -195,7 +220,7 @@
   }
   function fieldFilled(key) {
     var f = state.pForm, p = key.split('.');
-    var v = p[0] === 'x' ? f.extras[+p[1]] && f.extras[+p[1]][p[2]] : p[0] === 'p' ? f.prices[p[1]] : p[0] === 'a' ? f.actual[p[1]] : f[key];
+    var v = p[0] === 'x' ? f.extras[+p[1]] && f.extras[+p[1]][p[2]] : p[0] === 'p' ? f.prices[p[1]] : p[0] === 'a' ? f.actual[p[1]] : p[0] === 's' ? f.sold[p[1]] : f[key];
     return String(v === undefined ? '' : v).trim() !== '';
   }
   function paintForm() {
@@ -221,7 +246,8 @@
         '<div class="big num ' + cls(r.profit) + '">' + money(r.profit) + ' <span class="small muted" style="font-weight:400;font-family:Anuphan">บาท/ชิ้น</span></div>' +
         (r.list ? '<div class="sub num">ราคาตั้ง ' + money(r.list) + ' · ขายจริง ' + money(r.price) + ' (' + disc(r) + ')</div>' : '') +
         '<div class="sub num">กำไร ' + pct(r.margin) + ' · ต้นทุนรวม ' + money(r.costs) + ' · VAT ' + money(r.vat) + ' · GP ' + money(r.gpFee) + '</div>' +
-        '<div class="sub num">ราคาขั้นต่ำที่ไม่ขาดทุน ' + (r.breakEven === null ? 'คำนวณไม่ได้ ตรวจค่า GP' : money(r.breakEven)) + '</div></div>';
+        '<div class="sub num">ราคาขั้นต่ำที่ไม่ขาดทุน ' + (r.breakEven === null ? 'คำนวณไม่ได้ ตรวจค่า GP' : money(r.breakEven)) + '</div>' +
+        (r.qty === null ? '' : '<div class="sub num" style="color:rgb(var(--ink))">ขายได้ ' + qf(r.qty) + ' ชิ้น · ยอดขาย <b>' + money(r.revenue) + '</b> · กำไรรวม <b class="' + cls(r.totalProfit) + '">' + money(r.totalProfit) + '</b></div>') + '</div>';
     }).join('');
   }
 
@@ -230,6 +256,7 @@
     if (p[0] === 'x') f.extras[+p[1]][p[2]] = val;
     else if (p[0] === 'p') f.prices[p[1]] = val;
     else if (p[0] === 'a') f.actual[p[1]] = val;
+    else if (p[0] === 's') f.sold[p[1]] = val;
     else f[key] = val;
     if (state.miss[key]) delete state.miss[key];
     state.pDirty = true;
@@ -242,7 +269,8 @@
     ['cost', 'shipping', 'box', 'staff', 'ads'].forEach(function (k) { if (v[k] !== undefined) { f[k] = String(v[k]); read.push(FIELD_LABEL[k] + ' ' + v[k]); } });
     if (v.sale !== undefined) { f.prices[c] = String(v.sale); read.push(FIELD_LABEL.sale + ' ' + v.sale); }
     if (v.actual !== undefined) { f.actual[c] = String(v.actual); read.push(FIELD_LABEL.actual + ' ' + v.actual); }
-    var keyOf = { name: 'name', cost: 'cost', shipping: 'shipping', box: 'box', staff: 'staff', ads: 'ads', sale: 'p.' + c, actual: 'a.' + c };
+    if (v.sold !== undefined) { f.sold[c] = String(v.sold); read.push(FIELD_LABEL.sold + ' ' + v.sold); }
+    var keyOf = { name: 'name', cost: 'cost', shipping: 'shipping', box: 'box', staff: 'staff', ads: 'ads', sale: 'p.' + c, actual: 'a.' + c, sold: 's.' + c };
     state.miss = {};
     var need = [], clash = [];
     r.missing.forEach(function (m) {
@@ -251,12 +279,13 @@
     });
     r.conflicts.forEach(function (k) {
       // ข้อความให้ค่าไม่ตรงกัน: ไม่เดา เคลียร์ช่องนั้นทิ้ง ไม่ปล่อยค่าเก่าค้างให้เข้าใจผิดว่าอ่านมาจากข้อความ
-      if (k === 'sale') f.prices[c] = ''; else if (k === 'actual') f.actual[c] = ''; else f[k] = '';
+      if (k === 'sale') f.prices[c] = ''; else if (k === 'actual') f.actual[c] = ''; else if (k === 'sold') f.sold[c] = ''; else f[k] = '';
       state.miss[keyOf[k]] = 'ข้อความให้ค่าไม่ตรงกัน ตรวจและกรอกเอง'; clash.push(FIELD_LABEL[k]);
     });
     state.pDirty = true;
     state.pMsg = (read.length ? '<span class="pos">อ่านได้:</span> ' + esc(read.join(', ')) : '<span class="neg">ไม่พบคำสำคัญที่มีตัวเลขตามหลัง</span>') +
-      (need.length ? '<br><span style="color:#92660b">ต้องกรอกเอง:</span> ' + esc(need.join(', ')) : '') + (clash.length ? '<br><span class="neg">ข้อความขัดกัน (ไม่เดา):</span> ' + esc(clash.join(', ')) : '');
+      (need.length ? '<br><span style="color:#92660b">ต้องกรอกเอง:</span> ' + esc(need.join(', ')) : '') + (clash.length ? '<br><span class="neg">ข้อความขัดกัน (ไม่เดา):</span> ' + esc(clash.join(', ')) : '') +
+      (r.unread.length ? '<br><span class="muted">ข้ามไป (อ่านไม่ออกว่าเป็นเลขอะไร ถ้าสำคัญให้กรอกเอง):</span> ' + esc(r.unread.join(' / ')) : '');
     var keep = state.pText;
     $('main').innerHTML = viewForm(); $('paste').value = keep; paintForm();
   }
