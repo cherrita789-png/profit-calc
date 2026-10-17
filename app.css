@@ -14,11 +14,12 @@ body{min-height:100vh}
 .back{border:none;background:none;color:rgb(var(--muted));cursor:pointer;font-size:13.5px;padding:4px 0;display:inline-flex;gap:6px;align-items:center;text-decoration:none}
 .back:hover{color:rgb(var(--ink))}
 .filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.psel{border:1px solid rgb(var(--line)/.16);border-radius:10px;padding:8px 10px;font-size:13.5px;background:#fff;color:rgb(var(--ink));max-width:100%}
 .filters select{border:1px solid rgb(var(--line)/.16);border-radius:10px;padding:8px 10px;font-size:13.5px;background:#fff;color:rgb(var(--ink))}
 .filters label.ck,label.ck{display:inline-flex;align-items:center;gap:6px;margin:0;font-size:13.5px;color:rgb(var(--ink))}
 .filters label.ck input,label.ck input{width:auto}
-tbody tr[data-go]{cursor:pointer}
-tbody tr[data-go]:hover td{background:rgb(var(--line)/.035)}
+tbody tr[data-go],tbody tr[data-pgo]{cursor:pointer}
+tbody tr[data-go]:hover td,tbody tr[data-pgo]:hover td{background:rgb(var(--line)/.035)}
 td a.plink{color:rgb(var(--ink));font-weight:600;text-decoration:none}
 td a.plink:hover{text-decoration:underline}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}

@@ -7,6 +7,8 @@
   var money = function (n) { return (n < 0 ? '-' : '') + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
   var pct = function (n) { return n < -999 ? 'ต่ำกว่า -999%' : n > 999 ? 'เกิน 999%' : (n < 0 ? '-' : '') + Math.abs(n).toFixed(2) + '%'; };
   var cls = function (n) { return n < 0 ? 'neg' : ''; };
+  var TH_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+  var thMonth = function (m) { if (m === 'all') return 'ทุกเดือนรวมกัน'; var a = m.split('-'); return TH_MONTHS[+a[1] - 1] + ' ' + (+a[0] + 543); };
   var pct1 = function (n) { return n < -999 ? 'ต่ำกว่า -999%' : n > 999 ? 'เกิน 999%' : n.toFixed(1) + '%'; };
   var qf = function (n) { return n.toLocaleString('en-US', { maximumFractionDigits: 2 }); };
   var $ = function (id) { return document.getElementById(id); };
@@ -34,6 +36,7 @@
     sForm: null, sDirty: false, sShowErr: false, sSaved: false,
     pForm: null, pDirty: false, pShowErr: false, pText: '', pCh: null, miss: {}, pMsg: '', img: null,
     fil: { ch: 'all', loss: false, sort: 'desc' },
+    period: Store.currentMonth(), // เดือนที่ดูยอดขาย: 'YYYY-MM' หรือ 'all'
     cur: ''
   };
 
@@ -52,7 +55,21 @@
   function isDirty() { var n = route().name; return ((n === 'add' || n === 'edit') && state.pDirty) || (n === 'set' && state.sDirty); }
   function ch(id) { return state.data.channels.find(function (c) { return c.id === id; }); }
   function product(id) { return state.data.products.find(function (p) { return p.id === id; }); }
-  function calcFor(p, c) { return Calc.calcProduct(p, c, state.data.settings); }
+  function calcFor(p, c, period) { return Calc.calcProduct(p, c, state.data.settings, period || state.period); }
+  /* ตัวเลือกเดือน */
+  function lastMonths(n) {
+    var out = [], d = new Date(); d.setDate(1);
+    for (var i = 0; i < n; i++) { out.push(d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2)); d.setMonth(d.getMonth() - 1); }
+    return out;
+  }
+  function monthSet(list) { var set = {}; list.forEach(function (m) { if (Store.MONTH_RE.test(m)) set[m] = 1; }); return Object.keys(set).sort().reverse(); }
+  function dataMonths() { var set = {}; state.data.products.forEach(function (p) { Object.keys(p.sold || {}).forEach(function (m) { set[m] = 1; }); }); return Object.keys(set); }
+  function periodSelect() {
+    var ms = monthSet(lastMonths(1).concat(dataMonths(), state.period)), cur = state.period;
+    return '<select class="psel" data-period aria-label="เลือกเดือนที่ดูยอดขาย">' + ms.map(function (m) { return '<option value="' + m + '"' + (m === cur ? ' selected' : '') + '>ยอดขาย ' + esc(thMonth(m)) + '</option>'; }).join('') +
+      '<option value="all"' + (cur === 'all' ? ' selected' : '') + '>ยอดขาย ทุกเดือนรวมกัน</option></select>';
+  }
+  function formMonth() { return Store.MONTH_RE.test(state.period) ? state.period : Store.currentMonth(); }
   function results(p) {
     var out = [];
     state.data.channels.forEach(function (c) { var r = calcFor(p, c); if (r) out.push({ ch: c, r: r }); });
@@ -64,7 +81,7 @@
     var r = route();
     if (r.name === 'set') { state.sForm = Store.toForm(state.data); state.sDirty = false; state.sShowErr = false; state.sSaved = false; }
     if (r.name === 'add' || (r.name === 'edit' && product(r.id))) {
-      state.pForm = r.name === 'add' ? Store.blankProductForm(state.data.channels) : Store.productToForm(product(r.id), state.data.channels);
+      state.pForm = r.name === 'add' ? Store.blankProductForm(state.data.channels, formMonth()) : Store.productToForm(product(r.id), state.data.channels, formMonth());
       state.pDirty = false; state.pShowErr = false; state.pText = ''; state.miss = {}; state.pMsg = '';
       state.pCh = state.data.channels[0].id;
       if (state.img) { URL.revokeObjectURL(state.img); state.img = null; }
@@ -94,7 +111,7 @@
     return '<div class="lwarn"><b>ตรวจตัวเลขอีกที:</b> ต้นทุนรวม ' + money(r.costs) + ' บาท สูงกว่าราคาขาย ' + money(r.price) + ' บาท หลายเท่า อาจพิมพ์ตัวเลขเกินโดยไม่ได้ตั้งใจ (เช่น ต้นทุน 120 แต่พิมพ์ 120000)</div>';
   }
   /* ผลลัพธ์ 1 ช่องทาง อ่านเป็นลำดับ: ราคาขาย -> หักอะไรบ้าง -> ได้กำไรเท่าไร -> ถ้าใส่จำนวนที่ขายได้ ยอดรวม */
-  function liveCard(c, r) {
+  function liveCard(c, r, monthLabel) {
     var row = function (label, val, note, cl) { return '<div class="lv"><span>' + label + (note ? ' <small>' + note + '</small>' : '') + '</span><span class="num ' + (cl || '') + '">' + val + '</span></div>'; };
     var html = '<div class="res"><div class="h"><span>' + esc(c.name) + '</span>' + zone(r) + '</div>' +
       '<div class="lvt">ขาย 1 ชิ้น</div>' +
@@ -106,7 +123,7 @@
       '<div class="sub">' + (r.margin > -1000 && r.margin < 1000 ? 'คิดเป็น ' + pct(r.margin) + ' ของราคาขาย · ' : '') +
       (r.breakEven === null ? 'ราคาต่ำสุดที่ไม่ขาดทุน: คำนวณไม่ได้ ตรวจค่า GP' : 'ต้องขายอย่างน้อย ' + money(r.breakEven) + ' บาท ถึงจะไม่ขาดทุน') + '</div>';
     if (r.qty !== null) {
-      html += '<div class="lvt">ขายได้ ' + qf(r.qty) + ' ชิ้น</div>' +
+      html += '<div class="lvt">ขายได้ ' + qf(r.qty) + ' ชิ้น' + (monthLabel ? ' (' + esc(monthLabel) + ')' : '') + '</div>' +
         row('ยอดขายรวม', money(r.revenue), 'ราคาขาย x จำนวน') +
         '<div class="lv total"><span>' + (r.totalProfit < 0 ? 'ขาดทุนรวม' : 'กำไรรวม') + '</span><b class="num ' + cls(r.totalProfit) + '">' + money(r.totalProfit) + '</b></div>';
     }
@@ -139,17 +156,23 @@
       return (f.sort === 'desc' ? b.r.profit - a.r.profit : a.r.profit - b.r.profit) || a.p.name.localeCompare(b.p.name);
     });
     var noPrice = d.products.filter(function (p) { return !results(p).length; });
-    var sl = sum.sales;
-    var salesCards = sl.rows ? '<div class="stat"><div class="t">ยอดขายรวม (บาท)</div><div class="v num">' + money(sl.revenue) + '</div><div class="small muted">ขายได้ ' + qf(sl.qty) + ' ชิ้น จาก ' + sl.rows + ' รายการ</div></div>' +
-      '<div class="stat"><div class="t">กำไรรวม (บาท)</div><div class="v num ' + cls(sl.profit) + '">' + money(sl.profit) + '</div><div class="small muted">' + pct(sl.margin) + ' ของยอดขาย</div></div>' : '';
-    var salesHint = sl.rows ? '' : '<div class="hint">ใส่ "ขายได้กี่ชิ้น" ในฟอร์มสินค้าแต่ละตัว เพื่อดูยอดขายรวมและกำไรรวมที่นี่</div>';
+    var sl = sum.sales, pl = thMonth(state.period);
+    var salesCards = sl.rows ? '<div class="stat"><div class="t">ยอดขายรวม ' + pl + ' (บาท)</div><div class="v num">' + money(sl.revenue) + '</div><div class="small muted">ขายได้ ' + qf(sl.qty) + ' ชิ้น จาก ' + sl.rows + ' รายการ</div></div>' +
+      '<div class="stat"><div class="t">กำไรรวม ' + pl + ' (บาท)</div><div class="v num ' + cls(sl.profit) + '">' + money(sl.profit) + '</div><div class="small muted">' + pct(sl.margin) + ' ของยอดขาย</div></div>' : '';
+    var salesHint = sl.rows ? '' : '<div class="hint">ยังไม่มีจำนวนที่ขายได้ของ ' + esc(pl) + ' ใส่ "ขายได้กี่ชิ้น" ในฟอร์มสินค้า (เลือกเดือนได้) เพื่อดูยอดขายรวมและกำไรรวมที่นี่ หรือเลือกเดือนอื่นที่มุมขวาบนของตาราง</div>';
+    var mt = Calc.monthlyTotals(d.products, d.channels, d.settings);
+    var monthlyCard = mt.length ? '<div class="card" style="margin-bottom:16px"><h3>สรุปรายเดือน <span class="small muted" style="font-weight:400">(กดแถวเพื่อดูเดือนนั้น)</span></h3><table class="tbl"><thead><tr><th>เดือน</th><th class="r hm">ขายได้ (ชิ้น)</th><th class="r">ยอดขาย</th><th class="r">กำไรรวม</th><th class="r hm">% ของยอดขาย</th></tr></thead><tbody>' +
+      mt.map(function (t) {
+        var on = t.month === state.period;
+        return '<tr data-pgo="' + t.month + '"' + (on ? ' style="background:rgb(var(--line)/.05)"' : '') + '><td>' + (on ? '<b>' : '') + esc(thMonth(t.month)) + (on ? '</b>' : '') + '</td><td class="r num hm">' + qf(t.qty) + '</td><td class="r num">' + money(t.revenue) + '</td><td class="r num ' + cls(t.profit) + '"><b>' + money(t.profit) + '</b></td><td class="r num hm ' + cls(t.margin) + '">' + pct(t.margin) + '</td></tr>';
+      }).join('') + '</tbody></table></div>' : '';
     return head + '<div class="pagehead"><h1>แดชบอร์ด</h1><div class="sp"><a class="btn btn-sm" href="#add">เพิ่มสินค้า</a></div></div>' +
       '<div class="cards">' +
       '<div class="stat"><div class="t">สินค้าทั้งหมด</div><div class="v num">' + d.products.length + '</div></div>' +
       '<div class="stat"><div class="t">กำไรเฉลี่ยต่อชิ้น</div><div class="v num ' + cls(sum.avgProfit) + '">' + money(sum.avgProfit) + '</div></div>' +
       '<div class="stat"><div class="t">% กำไรเฉลี่ย</div><div class="v num ' + cls(sum.avgMargin) + '">' + pct(sum.avgMargin) + '</div></div>' +
-      '<div class="stat"><div class="t">รายการที่ขาดทุน</div><div class="v num ' + (sum.lossCount ? 'neg' : '') + '">' + sum.lossCount + ' <span class="small muted" style="font-weight:400">จาก ' + sum.count + '</span></div></div>' + salesCards + '</div>' + salesHint +
-      '<div class="filters"><select data-fil="ch" aria-label="กรองช่องทาง"><option value="all">ทุกช่องทาง</option>' +
+      '<div class="stat"><div class="t">รายการที่ขาดทุน</div><div class="v num ' + (sum.lossCount ? 'neg' : '') + '">' + sum.lossCount + ' <span class="small muted" style="font-weight:400">จาก ' + sum.count + '</span></div></div>' + salesCards + '</div>' + salesHint + monthlyCard +
+      '<div class="filters">' + periodSelect() + '<select data-fil="ch" aria-label="กรองช่องทาง"><option value="all">ทุกช่องทาง</option>' +
       d.channels.map(function (c) { return '<option value="' + esc(c.id) + '"' + (f.ch === c.id ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('') + '</select>' +
       '<select data-fil="sort" aria-label="เรียงลำดับ"><option value="desc"' + (f.sort === 'desc' ? ' selected' : '') + '>กำไรต่อชิ้น มาก ไป น้อย</option><option value="asc"' + (f.sort === 'asc' ? ' selected' : '') + '>กำไรต่อชิ้น น้อย ไป มาก</option><option value="tdesc"' + (f.sort === 'tdesc' ? ' selected' : '') + '>กำไรรวม มาก ไป น้อย</option></select>' +
       '<label class="ck"><input type="checkbox" data-fil="loss"' + (f.loss ? ' checked' : '') + '> เฉพาะที่ขาดทุน</label></div>' +
@@ -161,7 +184,7 @@
           '<td class="r num hm">' + (x.r.qty === null ? '-' : qf(x.r.qty)) + '</td><td class="r num hm">' + (x.r.revenue === null ? '-' : money(x.r.revenue)) + '</td>' +
           '<td class="r num ' + (x.r.totalProfit === null ? '' : cls(x.r.totalProfit)) + '">' + (x.r.totalProfit === null ? '<span class="muted">-</span>' : '<b>' + money(x.r.totalProfit) + '</b>') + '</td><td>' + zone(x.r) + '</td></tr>';
       }).join('') : '<tr><td colspan="10" class="empty">ไม่มีรายการตามตัวกรอง</td></tr>') + '</tbody></table>' +
-      '<p class="small muted" style="margin-top:10px">ต้นทุนรวม = ต้นทุนสินค้า + ขนส่ง + กล่อง + พนักงาน + แอด + อื่น ๆ (ยังไม่รวม GP และ VAT) · กดแถวเพื่อดูรายละเอียด · "กำไรบาง" = % กำไรต่ำกว่า ' + d.settings.thinMargin + '% (ปรับได้ในตั้งค่า) · กำไรรวม = กำไรต่อชิ้น x จำนวนที่ขายได้ (ไม่ได้ใส่จำนวนแสดง -)</p>' +
+      '<p class="small muted" style="margin-top:10px">ต้นทุนรวม = ต้นทุนสินค้า + ขนส่ง + กล่อง + พนักงาน + แอด + อื่น ๆ (ยังไม่รวม GP และ VAT) · กดแถวเพื่อดูรายละเอียด · "กำไรบาง" = % กำไรต่ำกว่า ' + d.settings.thinMargin + '% (ปรับได้ในตั้งค่า) · กำไรรวม = กำไรต่อชิ้น x จำนวนที่ขายได้ของเดือนที่เลือก (ไม่ได้ใส่จำนวนแสดง -)</p>' +
       (noPrice.length ? '<div class="hint warn" style="margin-top:12px">สินค้าที่ยังไม่มีราคาขายช่องทางไหนเลย (ไม่แสดงในตาราง): ' + noPrice.map(function (p) { return '<a href="#edit/' + esc(p.id) + '">' + esc(p.name) + '</a>'; }).join(', ') + '</div>' : '');
   }
 
@@ -173,13 +196,13 @@
     var cur = rs.find(function (x) { return x.ch.id === r0.ch; }) || rs[0];
     var eff = function (k, v) { return p[k] !== undefined ? money(v) : money(v) + ' <span class="small muted" style="font-weight:400">ค่ากลาง</span>'; };
     var head = '<a class="back" href="#dash">' + ICON.back + ' กลับแดชบอร์ด</a>' +
-      '<div class="pagehead"><h1>' + esc(p.name) + '</h1><div class="sp"><a class="btn btn-sm" href="#edit/' + esc(p.id) + '">แก้ไข</a><button class="btn btn-sm btn-danger" data-act="delprod">ลบ</button></div></div>' +
+      '<div class="pagehead"><h1>' + esc(p.name) + '</h1><div class="sp">' + periodSelect() + '<a class="btn btn-sm" href="#edit/' + esc(p.id) + '">แก้ไข</a><button class="btn btn-sm btn-danger" data-act="delprod">ลบ</button></div></div>' +
       (p.note ? '<p class="muted" style="margin:-6px 0 12px;font-size:13.5px">' + esc(p.note) + '</p>' : '');
     if (!cur) return head + gpWarn() + '<div class="card"><p class="muted">สินค้านี้ยังไม่มีราคาขายช่องทางไหนเลย</p><p style="margin-top:10px"><a class="btn-primary" style="text-decoration:none;display:inline-flex;width:auto" href="#edit/' + esc(p.id) + '">ใส่ราคาขาย</a></p></div>';
     var r = cur.r;
     var salesCard = r.qty === null
-      ? '<div class="hint" style="margin-top:16px">ช่องทาง ' + esc(cur.ch.name) + ' ยังไม่ได้ใส่จำนวนที่ขายได้ <a href="#edit/' + esc(p.id) + '">ใส่ในหน้าแก้ไข</a> เพื่อดูยอดขายรวมและกำไรรวม</div>'
-      : '<div class="card" style="margin-top:16px"><h3>ยอดขายรวมของช่องทาง ' + esc(cur.ch.name) + '</h3><div class="kv">' +
+      ? '<div class="hint" style="margin-top:16px">ช่องทาง ' + esc(cur.ch.name) + ' ยังไม่ได้ใส่จำนวนที่ขายได้ของ ' + esc(thMonth(state.period)) + ' <a href="#edit/' + esc(p.id) + '">ใส่ในหน้าแก้ไข</a> เพื่อดูยอดขายรวมและกำไรรวม</div>'
+      : '<div class="card" style="margin-top:16px"><h3>ยอดขายรวมของช่องทาง ' + esc(cur.ch.name) + ' · ' + esc(thMonth(state.period)) + '</h3><div class="kv">' +
         '<div>ขายได้ (ชิ้น)<b class="num">' + qf(r.qty) + '</b></div><div>ยอดขายรวม<b class="num">' + money(r.revenue) + '</b></div>' +
         '<div>ต้นทุนรวมทั้งหมด<b class="num">' + money(r.costs * r.qty) + '</b></div><div>ค่า GP รวม<b class="num">' + money(r.gpFee * r.qty) + '</b></div><div>VAT รวม<b class="num">' + money(r.vat * r.qty) + '</b></div>' +
         '<div>กำไรรวม<b class="num ' + cls(r.totalProfit) + '">' + money(r.totalProfit) + '</b></div></div>' +
@@ -237,23 +260,42 @@
       '<div class="field-row three" style="margin-top:0">' + d.channels.map(function (c) { return pfld('p.' + c.id, 'f-p-' + c.id, esc(c.name), f.prices[c.id]); }).join('') + '</div>' +
       '<label style="margin-top:14px;color:rgb(var(--ink));font-weight:600">ราคาขายจริงแต่ละช่องทาง <span class="muted" style="font-weight:400">(หลังส่วนลด/โปรโมชัน เว้นว่าง = ใช้ราคาตั้ง)</span></label>' +
       '<div class="field-row three" style="margin-top:0">' + d.channels.map(function (c) { return pfld('a.' + c.id, 'f-a-' + c.id, esc(c.name), f.actual[c.id], 'เท่าราคาตั้ง'); }).join('') + '</div><div class="fe" data-perr="prices"></div>' +
-      '<label style="margin-top:14px;color:rgb(var(--ink));font-weight:600">ขายได้กี่ชิ้น แต่ละช่องทาง <span class="muted" style="font-weight:400">(ไม่บังคับ ใส่แล้วจะเห็นยอดขายรวมและกำไรรวม)</span></label>' +
-      '<div class="field-row three" style="margin-top:0">' + d.channels.map(function (c) { return pfld('s.' + c.id, 'f-s-' + c.id, esc(c.name), f.sold[c.id], 'ไม่ใส่ = ไม่คำนวณยอดรวม'); }).join('') + '</div>' +
+      '<div id="soldbox">' + soldBoxHtml() + '</div>' +
       '<label for="f-note" style="margin-top:14px">โน้ต (ไม่บังคับ)</label><input id="f-note" data-pf="note" autocomplete="off" value="' + esc(f.note) + '" placeholder="เช่น ซัพพลายเออร์ สีที่ขาย">' +
       '<label style="margin-top:14px">รูปกระดาษที่จดไว้ (ไว้ดูประกอบตอนกรอก ไม่ถูกบันทึก)</label><div class="imgbox"><input type="file" id="img" accept="image/*"><div id="imgprev">' + (state.img ? '<img src="' + state.img + '" alt="รูปกระดาษที่แนบ">' : '<div style="margin-top:6px">ยังไม่ได้แนบรูป</div>') + '</div><div class="small" style="margin-top:8px">ยังไม่อ่านรูปให้อัตโนมัติ ดูรูปแล้วกรอกเองหรือพิมพ์ข้อความด้านบน</div></div>' +
       '<div class="btn-row"><button class="btn-primary" data-act="saveprod">บันทึกสินค้า</button><a class="btn" href="' + (editing ? '#p/' + esc(f.id) : '#dash') + '">ยกเลิก</a><span id="pflag" style="align-self:center"></span></div></div></div>' +
       '<div class="card sticky"><h3>ผลลัพธ์สด</h3><div id="live"></div></div></div>';
   }
+  /* กล่อง "ขายได้กี่ชิ้น" รายเดือน: เลือกเดือน แล้วกรอกจำนวนของแต่ละช่องทางในเดือนนั้น (เดือนอื่นที่กรอกไว้ยังอยู่) */
+  function soldBoxHtml() {
+    var f = state.pForm, d = state.data, m = f.soldMonth, vals = f.sold[m] || {};
+    var ms = monthSet(lastMonths(12).concat(Object.keys(f.sold), [m]));
+    var have = Object.keys(f.sold).filter(function (k) { return Object.keys(f.sold[k]).some(function (c) { return String(f.sold[k][c]).trim() !== ''; }); }).sort().reverse();
+    return '<label style="margin-top:14px;color:rgb(var(--ink));font-weight:600">ขายได้กี่ชิ้น แต่ละช่องทาง <span class="muted" style="font-weight:400">(ไม่บังคับ ใส่แล้วจะเห็นยอดขายรวมและกำไรรวม แยกตามเดือน)</span></label>' +
+      '<div style="display:flex;gap:8px;align-items:center;margin:6px 0 8px"><span class="small muted">จำนวนของเดือน</span><select class="psel" data-sm aria-label="เลือกเดือนของจำนวนที่ขายได้">' +
+      ms.map(function (x) { return '<option value="' + x + '"' + (x === m ? ' selected' : '') + '>' + esc(thMonth(x)) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="field-row three" style="margin-top:0">' + d.channels.map(function (c) { return pfld('s.' + c.id, 'f-s-' + c.id, esc(c.name), vals[c.id] || '', 'ไม่ใส่ = ไม่คำนวณยอดรวม'); }).join('') + '</div>' +
+      '<div class="fe" data-perr="smonths"></div>' +
+      (have.length ? '<div class="small muted">เดือนที่มีจำนวนในสินค้านี้: ' + have.map(function (x) { return esc(thMonth(x)); }).join(', ') + '</div>' : '');
+  }
   function fieldFilled(key) {
     var f = state.pForm, p = key.split('.');
-    var v = p[0] === 'x' ? f.extras[+p[1]] && f.extras[+p[1]][p[2]] : p[0] === 'p' ? f.prices[p[1]] : p[0] === 'a' ? f.actual[p[1]] : p[0] === 's' ? f.sold[p[1]] : f[key];
+    var v = p[0] === 'x' ? f.extras[+p[1]] && f.extras[+p[1]][p[2]] : p[0] === 'p' ? f.prices[p[1]] : p[0] === 'a' ? f.actual[p[1]] : p[0] === 's' ? (f.sold[f.soldMonth] || {})[p[1]] : f[key];
     return String(v === undefined ? '' : v).trim() !== '';
   }
   function paintForm() {
     if (!state.pForm || ['add', 'edit'].indexOf(route().name) < 0 || !$('live')) return;
     var f = state.pForm, v = Store.validateProductForm(f, state.data.channels);
+    // error ของจำนวนที่ขายได้มีคีย์ s.<เดือน>.<ช่องทาง> ช่องของเดือนที่เปิดอยู่แสดงที่ช่อง เดือนอื่นสรุปเป็นข้อความเดียว
+    var errs = Object.assign({}, v.errors), badMonths = {};
+    Object.keys(v.errors).forEach(function (k) {
+      var mm = /^s\.(\d{4}-\d{2})\.(.+)$/.exec(k);
+      if (!mm) return;
+      if (mm[1] === f.soldMonth) errs['s.' + mm[2]] = v.errors[k]; else badMonths[mm[1]] = 1;
+    });
+    errs.smonths = Object.keys(badMonths).length ? 'มีตัวเลขผิดในเดือน ' + Object.keys(badMonths).sort().map(thMonth).join(', ') + ' เปลี่ยนเดือนไปแก้' : '';
     document.querySelectorAll('[data-perr]').forEach(function (e) {
-      var key = e.dataset.perr, msg = v.errors[key] || '', show = msg && (state.pShowErr || (key !== 'prices' && fieldFilled(key)));
+      var key = e.dataset.perr, msg = errs[key] || '', show = msg && (key === 'smonths' || state.pShowErr || (key !== 'prices' && fieldFilled(key)));
       e.textContent = show ? msg : '';
       var inp = e.previousElementSibling && e.previousElementSibling.tagName === 'INPUT' ? e.previousElementSibling : null;
       if (inp) inp.classList.toggle('bad', !!show);
@@ -266,9 +308,9 @@
     if (v.errors.prices) { live.innerHTML = '<div class="empty">ใส่ราคาขายอย่างน้อย 1 ช่องทางเพื่อดูผลลัพธ์</div>'; return; }
     var v2 = Store.validateProductForm(Object.assign({}, f, { name: f.name.trim() ? f.name : '-' }), state.data.channels);
     live.innerHTML = state.data.channels.map(function (c) {
-      var r = calcFor(v2.clean, c);
+      var r = calcFor(v2.clean, c, f.soldMonth);
       if (!r) return '<div class="res"><div class="h"><span>' + esc(c.name) + '</span><span class="zone gray">ไม่ได้ขาย</span></div></div>';
-      return liveCard(c, r);
+      return liveCard(c, r, thMonth(f.soldMonth));
     }).join('');
   }
 
@@ -277,7 +319,7 @@
     if (p[0] === 'x') f.extras[+p[1]][p[2]] = val;
     else if (p[0] === 'p') f.prices[p[1]] = val;
     else if (p[0] === 'a') f.actual[p[1]] = val;
-    else if (p[0] === 's') f.sold[p[1]] = val;
+    else if (p[0] === 's') { (f.sold[f.soldMonth] = f.sold[f.soldMonth] || {})[p[1]] = val; }
     else f[key] = val;
     if (state.miss[key]) delete state.miss[key];
     state.pDirty = true;
@@ -290,7 +332,7 @@
     ['cost', 'shipping', 'box', 'staff', 'ads'].forEach(function (k) { if (v[k] !== undefined) { f[k] = String(v[k]); read.push(FIELD_LABEL[k] + ' ' + v[k]); } });
     if (v.sale !== undefined) { f.prices[c] = String(v.sale); read.push(FIELD_LABEL.sale + ' ' + v.sale); }
     if (v.actual !== undefined) { f.actual[c] = String(v.actual); read.push(FIELD_LABEL.actual + ' ' + v.actual); }
-    if (v.sold !== undefined) { f.sold[c] = String(v.sold); read.push(FIELD_LABEL.sold + ' ' + v.sold); }
+    if (v.sold !== undefined) { (f.sold[f.soldMonth] = f.sold[f.soldMonth] || {})[c] = String(v.sold); read.push(FIELD_LABEL.sold + ' ' + v.sold + ' (เดือน ' + thMonth(f.soldMonth) + ')'); }
     var keyOf = { name: 'name', cost: 'cost', shipping: 'shipping', box: 'box', staff: 'staff', ads: 'ads', sale: 'p.' + c, actual: 'a.' + c, sold: 's.' + c };
     state.miss = {};
     var need = [], clash = [];
@@ -300,7 +342,7 @@
     });
     r.conflicts.forEach(function (k) {
       // ข้อความให้ค่าไม่ตรงกัน: ไม่เดา เคลียร์ช่องนั้นทิ้ง ไม่ปล่อยค่าเก่าค้างให้เข้าใจผิดว่าอ่านมาจากข้อความ
-      if (k === 'sale') f.prices[c] = ''; else if (k === 'actual') f.actual[c] = ''; else if (k === 'sold') f.sold[c] = ''; else f[k] = '';
+      if (k === 'sale') f.prices[c] = ''; else if (k === 'actual') f.actual[c] = ''; else if (k === 'sold') { (f.sold[f.soldMonth] = f.sold[f.soldMonth] || {})[c] = ''; } else f[k] = '';
       state.miss[keyOf[k]] = 'ข้อความให้ค่าไม่ตรงกัน ตรวจและกรอกเอง'; clash.push(FIELD_LABEL[k]);
     });
     state.pDirty = true;
@@ -424,6 +466,8 @@
 
   /* ---------- เหตุการณ์ ---------- */
   document.addEventListener('click', function (e) {
+    var pg = e.target.closest('tr[data-pgo]');
+    if (pg) { state.period = pg.dataset.pgo; render(); return; }
     var go = e.target.closest('tr[data-go]');
     if (go && !e.target.closest('a')) { location.hash = go.dataset.go; return; }
     var t = e.target.closest('[data-act]'); if (!t || t.disabled) return;
@@ -454,6 +498,8 @@
   document.addEventListener('change', function (e) {
     var t = e.target;
     if (t.dataset.f !== undefined) { if (t.type === 'checkbox') setSField(t.dataset.f, t.checked); else if (t.tagName === 'SELECT') setSField(t.dataset.f, t.value); else return; paintSet(); }
+    else if (t.dataset.period !== undefined) { state.period = t.value; render(); }
+    else if (t.dataset.sm !== undefined) { var fm = state.pForm; fm.soldMonth = t.value; fm.sold[t.value] = fm.sold[t.value] || {}; $('soldbox').innerHTML = soldBoxHtml(); paintForm(); }
     else if (t.dataset.fil) { state.fil[t.dataset.fil] = t.type === 'checkbox' ? t.checked : t.value; render(); }
     else if (t.dataset.pch !== undefined) { state.pCh = t.value; }
     else if (t.id === 'img' && t.files[0]) {

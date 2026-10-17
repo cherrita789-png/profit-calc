@@ -12,6 +12,7 @@
   var MODES = ['perUnit', 'perMonth'];
   var DEFAULT_THIN = 10; // % กำไรที่ถือว่า "บาง" (ค่าเริ่มต้น เจ้าของร้านปรับได้)
   var MONEY_ERR = 'กรอกเป็นตัวเลขตั้งแต่ 0 ขึ้นไป';
+  var MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/; // เดือนของจำนวนที่ขายได้ เช่น 2026-10
 
   function defaults() {
     return {
@@ -42,6 +43,31 @@
     return Object.keys(m).every(function (k) { return ids[k] && isNum(m[k]); });
   }
 
+  /* จำนวนที่ขายได้แยกเดือน: { 'YYYY-MM': { ช่องทาง: จำนวน } } ช่องทางต้องมีอยู่ จำนวน >= 0 */
+  function isSoldMap(sold, ids) {
+    if (sold === undefined) return true;
+    if (!sold || typeof sold !== 'object' || Array.isArray(sold)) return false;
+    return Object.keys(sold).every(function (m) { return MONTH_RE.test(m) && sold[m] && typeof sold[m] === 'object' && !Array.isArray(sold[m]) && isMoneyMap(sold[m], ids); });
+  }
+
+  function currentMonth() {
+    var d = new Date();
+    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2);
+  }
+
+  /* ข้อมูลรุ่นก่อนเก็บจำนวนที่ขายได้แบบไม่มีเดือน { ช่องทาง: จำนวน } ย้ายเข้าเดือนที่ระบุ (ค่าเริ่มต้นเดือนปัจจุบัน) ไม่ให้ข้อมูลหาย */
+  function migrate(d, month) {
+    if (!d || !Array.isArray(d.products)) return d;
+    d.products.forEach(function (p) {
+      if (!p || !p.sold || typeof p.sold !== 'object' || Array.isArray(p.sold)) return;
+      var keys = Object.keys(p.sold);
+      if (keys.length && keys.every(function (k) { return typeof p.sold[k] === 'number'; })) {
+        var m = {}; m[month || currentMonth()] = p.sold; p.sold = m;
+      }
+    });
+    return d;
+  }
+
   /* สินค้า 1 ตัวใช้ได้ไหม (ราคาอ้างได้เฉพาะช่องทางที่มีอยู่) ไม่บังคับต้องมีราคา เพราะลบช่องทางแล้วสินค้าอาจไม่เหลือราคา */
   function isValidProduct(p, ids) {
     if (!p || typeof p.id !== 'string' || !p.id || typeof p.name !== 'string' || !p.name.trim()) return false;
@@ -52,7 +78,7 @@
       if (!p.extras.every(function (e) { return e && typeof e.name === 'string' && isNum(e.amt); })) return false;
     }
     if (p.note !== undefined && typeof p.note !== 'string') return false;
-    return isMoneyMap(p.prices, ids) && isMoneyMap(p.actual, ids) && isMoneyMap(p.sold, ids);
+    return isMoneyMap(p.prices, ids) && isMoneyMap(p.actual, ids) && isSoldMap(p.sold, ids);
   }
 
   /* โครงข้อมูลที่อ่านมาใช้ได้ไหม (กันไฟล์เสีย/ถูกแก้มือ/เวอร์ชันอื่น) */
@@ -97,7 +123,13 @@
       if (raw === null || raw === undefined) return { data: defaults(), status: 'new' };
       var parsed = null;
       try { parsed = JSON.parse(raw); } catch (e) { parsed = null; }
-      if (isValidData(parsed)) return { data: normalize(parsed), status: 'ok' };
+      var before = parsed ? JSON.stringify(parsed) : '';
+      try { migrate(parsed); } catch (e) { /* โครงพัง ปล่อยให้การตรวจข้อมูลจัดการ */ }
+      if (isValidData(parsed)) {
+        // ถ้าเพิ่งย้ายข้อมูลรุ่นเก่า เขียนกลับทันที ไม่งั้นเปิดอีกทีเดือนหน้าข้อมูลจะไปตกเดือนใหม่
+        if (JSON.stringify(parsed) !== before) { try { storage.setItem(KEY, JSON.stringify(parsed)); } catch (e) { /* เขียนไม่ได้ก็ใช้ในหน่วยความจำต่อ */ } }
+        return { data: normalize(parsed), status: 'ok' };
+      }
       try { storage.setItem(BACKUP_KEY, raw); } catch (e) { /* เก็บสำรองไม่ได้ก็ไม่เป็นไร */ }
       return { data: defaults(), status: 'recovered' };
     }
@@ -116,7 +148,7 @@
   /* ช่องทางนี้มีสินค้าใช้ราคาอยู่ไหม (ไว้เตือนก่อนลบ) */
   function channelInUse(data, id) {
     return data.products.some(function (p) {
-      return (p.prices && p.prices[id] !== undefined) || (p.actual && p.actual[id] !== undefined) || (p.sold && p.sold[id] !== undefined);
+      return (p.prices && p.prices[id] !== undefined) || (p.actual && p.actual[id] !== undefined) || (p.sold && Object.keys(p.sold).some(function (m) { return p.sold[m] && p.sold[m][id] !== undefined; }));
     });
   }
 
@@ -140,7 +172,7 @@
       return out;
     }
     return Object.assign({}, data, { products: data.products.map(function (p) {
-      var q = Object.assign({}, p); q.prices = keep(p.prices); if (p.actual) q.actual = keep(p.actual); if (p.sold) q.sold = keep(p.sold); return q;
+      var q = Object.assign({}, p); q.prices = keep(p.prices); if (p.actual) q.actual = keep(p.actual); if (p.sold) { var ns = {}; Object.keys(p.sold).forEach(function (m) { var k = keep(p.sold[m]); if (Object.keys(k).length) ns[m] = k; }); q.sold = ns; } return q;
     }) });
   }
 
@@ -209,13 +241,16 @@
   }
 
   /* ---------- ฟอร์มสินค้า ---------- */
-  function blankProductForm(channels) {
-    var f = { id: null, name: '', note: '', cost: '', shipping: '', box: '', staff: '', ads: '', other: '', extras: [], prices: {}, actual: {}, sold: {} };
-    channels.forEach(function (c) { f.prices[c.id] = ''; f.actual[c.id] = ''; f.sold[c.id] = ''; });
+  /* f.sold = { 'YYYY-MM': { ช่องทาง: ข้อความ } } ทุกเดือนที่มีข้อมูล, f.soldMonth = เดือนที่กำลังแก้ในฟอร์ม */
+  function emptySoldMonth(channels) { var m = {}; channels.forEach(function (c) { m[c.id] = ''; }); return m; }
+  function blankProductForm(channels, month) {
+    var f = { id: null, name: '', note: '', cost: '', shipping: '', box: '', staff: '', ads: '', other: '', extras: [], prices: {}, actual: {}, sold: {}, soldMonth: month || currentMonth() };
+    channels.forEach(function (c) { f.prices[c.id] = ''; f.actual[c.id] = ''; });
+    f.sold[f.soldMonth] = emptySoldMonth(channels);
     return f;
   }
-  function productToForm(p, channels) {
-    var f = blankProductForm(channels);
+  function productToForm(p, channels, month) {
+    var f = blankProductForm(channels, month);
     f.id = p.id; f.name = p.name; f.note = p.note || '';
     f.cost = String(p.cost); f.shipping = String(p.shipping); f.box = String(p.box);
     ['staff', 'ads', 'other'].forEach(function (k) { f[k] = p[k] === undefined ? '' : String(p[k]); });
@@ -223,7 +258,10 @@
     channels.forEach(function (c) {
       if (p.prices && p.prices[c.id] !== undefined) f.prices[c.id] = String(p.prices[c.id]);
       if (p.actual && p.actual[c.id] !== undefined) f.actual[c.id] = String(p.actual[c.id]);
-      if (p.sold && p.sold[c.id] !== undefined) f.sold[c.id] = String(p.sold[c.id]);
+    });
+    Object.keys(p.sold || {}).forEach(function (m) {
+      f.sold[m] = f.sold[m] || emptySoldMonth(channels);
+      channels.forEach(function (c) { if (p.sold[m][c.id] !== undefined) f.sold[m][c.id] = String(p.sold[m][c.id]); });
     });
     return f;
   }
@@ -262,15 +300,21 @@
 
     var prices = {}, actual = {}, sold = {};
     channels.forEach(function (c) {
-      var p = P(form.prices[c.id]), a = P(form.actual[c.id]), s = P(form.sold ? form.sold[c.id] : '');
+      var p = P(form.prices[c.id]), a = P(form.actual[c.id]);
       if (Number.isNaN(p)) errors['p.' + c.id] = MONEY_ERR; else if (p !== null) prices[c.id] = p;
       if (Number.isNaN(a)) errors['a.' + c.id] = MONEY_ERR; else if (a !== null) actual[c.id] = a;
-      if (Number.isNaN(s)) errors['s.' + c.id] = MONEY_ERR;
-      else if (s !== null) {
-        // จำนวนที่ขายได้ ต้องมีราคาของช่องทางนั้นก่อน ไม่งั้นคำนวณยอดขายไม่ได้
-        if (prices[c.id] === undefined && actual[c.id] === undefined && !errors['p.' + c.id] && !errors['a.' + c.id]) errors['s.' + c.id] = 'ใส่ราคาขายของช่องทางนี้ก่อน';
-        else sold[c.id] = s;
-      }
+    });
+    // จำนวนที่ขายได้รายเดือน คีย์ error: s.<YYYY-MM>.<ช่องทาง> ต้องมีราคาของช่องทางนั้นก่อน ไม่งั้นคำนวณยอดขายไม่ได้
+    Object.keys(form.sold || {}).forEach(function (m) {
+      if (!MONTH_RE.test(m)) return;
+      channels.forEach(function (c) {
+        var s = P(form.sold[m][c.id]), key = 's.' + m + '.' + c.id;
+        if (Number.isNaN(s)) errors[key] = MONEY_ERR;
+        else if (s !== null) {
+          if (prices[c.id] === undefined && actual[c.id] === undefined && !errors['p.' + c.id] && !errors['a.' + c.id]) errors[key] = 'ใส่ราคาขายของช่องทางนี้ก่อน';
+          else { sold[m] = sold[m] || {}; sold[m][c.id] = s; }
+        }
+      });
     });
     if (!Object.keys(prices).length && !Object.keys(actual).length) errors.prices = 'ใส่ราคาอย่างน้อย 1 ช่องทาง';
     clean.prices = prices;
@@ -292,13 +336,14 @@
     var o;
     try { o = JSON.parse(text); } catch (e) { return { ok: false, error: 'json' }; }
     if (!o || typeof o !== 'object') return { ok: false, error: 'shape' };
+    try { migrate(o); } catch (e) { /* โครงพัง ให้การตรวจข้อมูลปฏิเสธ */ }
     var data = { version: o.version, settings: o.settings, channels: o.channels, products: o.products };
     if (!isValidData(data)) return { ok: false, error: 'shape' };
     return { ok: true, data: normalize(JSON.parse(JSON.stringify(data))) };
   }
 
   return {
-    KEY: KEY, BACKUP_KEY: BACKUP_KEY, DEFAULT_THIN: DEFAULT_THIN, defaults: defaults, isValidData: isValidData, isValidProduct: isValidProduct, createStore: createStore,
+    KEY: KEY, BACKUP_KEY: BACKUP_KEY, MONTH_RE: MONTH_RE, currentMonth: currentMonth, migrate: migrate, DEFAULT_THIN: DEFAULT_THIN, defaults: defaults, isValidData: isValidData, isValidProduct: isValidProduct, createStore: createStore,
     channelInUse: channelInUse, newChannelId: newChannelId, newProductId: newProductId, pruneChannels: pruneChannels,
     upsertProduct: upsertProduct, deleteProduct: deleteProduct,
     toForm: toForm, validateForm: validateForm, blankProductForm: blankProductForm, productToForm: productToForm, validateProductForm: validateProductForm,

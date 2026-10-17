@@ -32,12 +32,30 @@
     return x.amount;
   }
 
+  /* จำนวนที่ขายได้ของช่องทางหนึ่งในเดือนที่เลือก ('YYYY-MM') หรือรวมทุกเดือน ('all'/ไม่ใส่)
+   * คืน null ถ้าไม่ได้ใส่จำนวนเลย (ไม่เดาเป็น 0) */
+  function soldQty(product, chId, period) {
+    var sold = product.sold;
+    if (!sold) return null;
+    if (period && period !== 'all') {
+      var m = sold[period];
+      return m && m[chId] !== undefined && m[chId] !== null ? m[chId] : null;
+    }
+    var total = null;
+    Object.keys(sold).forEach(function (k) {
+      var v = sold[k] && sold[k][chId];
+      if (v !== undefined && v !== null) total = (total || 0) + v;
+    });
+    return total;
+  }
+
   /* คำนวณ 1 สินค้า x 1 ช่องทาง
-   * product  = { cost, shipping, box, staff?, ads?, other?, extras?: [{name, amt}], prices: {ch: n}, actual?: {ch: n}, sold?: {ch: จำนวนชิ้น} }
+   * product  = { cost, shipping, box, staff?, ads?, other?, extras?: [{name, amt}], prices: {ch: n}, actual?: {ch: n}, sold?: {'YYYY-MM': {ch: จำนวนชิ้น}} }
    * channel  = { id, gp }   (gp เป็น % ของราคาขาย)
    * settings = { vatOn, monthlyUnits, staff, ads, other }
+   * period   = 'YYYY-MM' (เดือนที่ดูยอดขาย) หรือ 'all'/ไม่ใส่ = รวมทุกเดือน
    * คืน null ถ้าสินค้านี้ไม่ได้ขายช่องทางนั้น (ไม่มีทั้งราคาตั้งและราคาขายจริง) */
-  function calcProduct(product, channel, settings) {
+  function calcProduct(product, channel, settings, period) {
     var listP = product.prices ? product.prices[channel.id] : undefined;
     var act = product.actual ? product.actual[channel.id] : undefined;
     var price = act !== undefined && act !== null ? act : listP;
@@ -60,7 +78,7 @@
     var denom = 1 - vatRate - gpRate;
 
     // ขายได้กี่ชิ้น (ไม่บังคับ): ถ้ามี คำนวณยอดขายรวมและกำไรรวม (กำไรต่อชิ้น x จำนวน) ถ้าไม่มี = null ไม่เดาจำนวน
-    var qty = product.sold && product.sold[channel.id] !== undefined && product.sold[channel.id] !== null ? product.sold[channel.id] : null;
+    var qty = soldQty(product, channel.id, period);
 
     return {
       channelId: channel.id,
@@ -85,6 +103,24 @@
       if (r) out.push({ channel: ch, result: r });
     });
     return out;
+  }
+
+  /* สรุปรายเดือน: คืน [{ month, rows, qty, revenue, profit, margin }] เดือนล่าสุดก่อน
+   * นับเฉพาะสินค้า x ช่องทางที่ใส่จำนวนในเดือนนั้น และมีราคาของช่องทางนั้น */
+  function monthlyTotals(products, channels, settings) {
+    var months = {};
+    products.forEach(function (p) { Object.keys(p.sold || {}).forEach(function (m) { months[m] = 1; }); });
+    return Object.keys(months).sort().reverse().map(function (m) {
+      var t = { month: m, rows: 0, qty: 0, revenue: 0, profit: 0, margin: 0 };
+      products.forEach(function (p) {
+        channels.forEach(function (c) {
+          var r = calcProduct(p, c, settings, m);
+          if (r && r.qty !== null) { t.rows++; t.qty += r.qty; t.revenue += r.revenue; t.profit += r.totalProfit; }
+        });
+      });
+      t.margin = t.revenue > 0 ? t.profit / t.revenue * 100 : 0;
+      return t;
+    });
   }
 
   /* สถานะกำไร: 'loss' (ขาดทุน) | 'thin' (% กำไรต่ำกว่า thin) | 'ok' */
@@ -133,5 +169,5 @@
     return w;
   }
 
-  return { VAT_RATE: VAT_RATE, warnings: warnings, round2: round2, parseMoney: parseMoney, overheadPerUnit: overheadPerUnit, calcProduct: calcProduct, calcAll: calcAll, status: status, summarize: summarize, breakdown: breakdown };
+  return { VAT_RATE: VAT_RATE, warnings: warnings, round2: round2, parseMoney: parseMoney, overheadPerUnit: overheadPerUnit, calcProduct: calcProduct, calcAll: calcAll, soldQty: soldQty, monthlyTotals: monthlyTotals, status: status, summarize: summarize, breakdown: breakdown };
 });

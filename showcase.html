@@ -24,18 +24,20 @@
 <div class="toast" id="toast"></div>
 
 <script>
+function ym(d) { var t = new Date(); t.setDate(1); t.setMonth(t.getMonth() + d); return t.getFullYear() + '-' + ('0' + (t.getMonth() + 1)).slice(-2); }
+var M0 = ym(0), M1 = ym(-1); // เดือนนี้ และเดือนก่อน (ข้อมูลสมมติ)
 window.COSTCALC_DEMO = {
   version: 1,
   settings: { vatOn: true, monthlyUnits: 150, thinMargin: 10,
     staff: { amount: 5, mode: 'perUnit' }, ads: { amount: 20, mode: 'perUnit' }, other: { amount: 0, mode: 'perUnit' } },
   channels: [{ id: 'fb', name: 'Facebook', gp: 0 }, { id: 'sp', name: 'Shopee', gp: 10 }, { id: 'ln', name: 'Line', gp: 0 }],
   products: [
-    { id: 'p1', name: 'เสื้อ A', cost: 120, shipping: 35, box: 8, prices: { fb: 299, sp: 299, ln: 280 }, sold: { fb: 120, sp: 80, ln: 20 } },
-    { id: 'p2', name: 'เสื้อ B', cost: 150, shipping: 35, box: 8, prices: { fb: 399, sp: 429 }, sold: { fb: 30, sp: 55 } },
-    { id: 'p3', name: 'กระเป๋า C', cost: 120, shipping: 35, box: 8, prices: { fb: 249, sp: 199 }, sold: { fb: 15, sp: 40 } },
+    { id: 'p1', name: 'เสื้อ A', cost: 120, shipping: 35, box: 8, prices: { fb: 299, sp: 299, ln: 280 }, sold: { [M0]: { fb: 120, sp: 80, ln: 20 }, [M1]: { fb: 100, sp: 60, ln: 10 } } },
+    { id: 'p2', name: 'เสื้อ B', cost: 150, shipping: 35, box: 8, prices: { fb: 399, sp: 429 }, sold: { [M0]: { fb: 30, sp: 55 }, [M1]: { fb: 20, sp: 40 } } },
+    { id: 'p3', name: 'กระเป๋า C', cost: 120, shipping: 35, box: 8, prices: { fb: 249, sp: 199 }, sold: { [M0]: { fb: 15, sp: 40 }, [M1]: { fb: 10, sp: 30 } } },
     { id: 'p4', name: 'หมวก D', cost: 60, shipping: 25, box: 5, ads: 10, extras: [{ name: 'ค่าถุงซิป', amt: 2 }],
-      prices: { fb: 149, sp: 159, ln: 139 }, actual: { sp: 149 }, sold: { fb: 60, sp: 90, ln: 25 }, note: 'ซัพ X สีดำ' },
-    { id: 'p5', name: 'ถุงเท้า E', cost: 25, shipping: 15, box: 3, prices: { fb: 59, sp: 59 }, sold: { fb: 200, sp: 150 } }
+      prices: { fb: 149, sp: 159, ln: 139 }, actual: { sp: 149 }, sold: { [M0]: { fb: 60, sp: 90, ln: 25 }, [M1]: { fb: 50, sp: 70, ln: 15 } }, note: 'ซัพ X สีดำ' },
+    { id: 'p5', name: 'ถุงเท้า E', cost: 25, shipping: 15, box: 3, prices: { fb: 59, sp: 59 }, sold: { [M0]: { fb: 200, sp: 150 }, [M1]: { fb: 150, sp: 100 } } }
   ]
 };
 </script>
