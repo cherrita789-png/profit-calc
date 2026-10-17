@@ -49,11 +49,14 @@
     return total;
   }
 
-  /* คำนวณ 1 สินค้า x 1 ช่องทาง
+  /* คำนวณ 1 สินค้า x 1 ช่องทาง (ต่อชิ้น)
    * product  = { cost, shipping, box, staff?, ads?, other?, extras?: [{name, amt}], prices: {ch: n}, actual?: {ch: n}, sold?: {'YYYY-MM': {ch: จำนวนชิ้น}} }
    * channel  = { id, gp }   (gp เป็น % ของราคาขาย)
-   * settings = { vatOn, monthlyUnits, staff, ads, other }
-   * period   = 'YYYY-MM' (เดือนที่ดูยอดขาย) หรือ 'all'/ไม่ใส่ = รวมทุกเดือน
+   * settings = { vatOn, monthlyUnits, monthlyAsLump?, staff, ads, other }
+   * period   = 'YYYY-MM' (เดือนที่ดูยอดขาย) หรือ 'all'/ไม่ใส่ = รวมทุกเดือน (ใช้เลือกจำนวนที่ขายได้ qty)
+   * monthlyAsLump = true: ค่าพนักงาน/แอด/อื่น ๆ ที่ตั้งเป็น perMonth คือ "ก้อนรายเดือน" ไม่ถูกเฉลี่ยลงต่อชิ้น (หักทีเดียวต่อเดือนใน monthlyPL)
+   *                 ส่วนค่าที่กรอกเองรายสินค้ากับค่าแบบ perUnit ยังรวมในต้นทุนต่อชิ้นตามเดิม lumpExcluded บอกว่าค่าไหนยังไม่ถูกหัก
+   * monthlyAsLump ไม่เปิด (undefined/false) = เฉลี่ยค่า perMonth ลงต่อชิ้นด้วย monthlyUnits (จำนวนที่คาดไว้) แบบเดิม
    * คืน null ถ้าสินค้านี้ไม่ได้ขายช่องทางนั้น (ไม่มีทั้งราคาตั้งและราคาขายจริง) */
   function calcProduct(product, channel, settings, period) {
     var listP = product.prices ? product.prices[channel.id] : undefined;
@@ -63,9 +66,14 @@
 
     var vatRate = settings.vatOn ? VAT_RATE : 0;
     var gpRate = channel.gp / 100;
-    var units = settings.monthlyUnits;
+    var lump = settings.monthlyAsLump === true, excluded = [];
 
-    function over(k) { return product[k] !== undefined && product[k] !== null ? product[k] : overheadPerUnit(settings[k], units); }
+    function over(k) {
+      if (product[k] !== undefined && product[k] !== null) return product[k];
+      var x = settings[k];
+      if (lump && x && x.mode === 'perMonth') { if (x.amount) excluded.push(k); return 0; }
+      return overheadPerUnit(x, settings.monthlyUnits);
+    }
     var staff = over('staff'), ads = over('ads'), other = over('other');
     var shipping = product.shipping || 0, box = product.box || 0;
     var extras = product.extras || [];
@@ -86,6 +94,7 @@
       price: price,
       list: listP !== undefined && listP !== null && act !== undefined && act !== null ? listP : null,
       cost: product.cost, shipping: shipping, box: box, staff: staff, ads: ads, other: other, extras: extras,
+      lumpExcluded: excluded, // ค่าก้อนรายเดือนที่ยังไม่ได้หักในตัวเลขต่อชิ้นนี้ (ไปหักในงบรายเดือน)
       costs: costs, vat: vat, gpFee: gpFee, profit: profit,
       margin: price > 0 ? profit / price * 100 : 0,
       breakEven: denom > 0 ? costs / denom : null, // null = คำนวณไม่ได้ ตรวจค่า GP
@@ -105,22 +114,76 @@
     return out;
   }
 
-  /* สรุปรายเดือน: คืน [{ month, rows, qty, revenue, profit, margin }] เดือนล่าสุดก่อน
-   * นับเฉพาะสินค้า x ช่องทางที่ใส่จำนวนในเดือนนั้น และมีราคาของช่องทางนั้น */
-  function monthlyTotals(products, channels, settings) {
+  var OVERHEAD_LABELS = { staff: 'ค่าพนักงาน', ads: 'ค่าแอด', other: 'ค่าดำเนินการอื่น ๆ' };
+
+  /* งบกำไร-ขาดทุนของเดือนเดียว: ยอดขาย - VAT - GP - ต้นทุน/ขนส่ง/กล่อง/ค่ารายชิ้น = กำไรขั้นต้น แล้วหักค่าใช้จ่ายก้อนรายเดือนทีเดียว = กำไรสุทธิ
+   * นับเฉพาะสินค้า x ช่องทางที่ใส่จำนวนในเดือนนั้น (และมีราคา)
+   * expenses = { 'YYYY-MM': { staff?, ads?, other?, extras?: [{name, amt}] } } ค่าใช้จ่ายจริงที่กรอกของแต่ละเดือน
+   * ค่าก้อนรายเดือน (เมื่อ settings.monthlyAsLump เปิด): ค่า staff/ads/other ที่ตั้งเป็น perMonth ใช้ค่าที่กรอกของเดือนนั้น ถ้าไม่ได้กรอกใช้ค่าที่ตั้งไว้เป็นค่าเริ่มต้น
+   * extras ของเดือน (ค่าเช่า ฯลฯ) หักเสมอ ไม่ว่าโหมดไหน; ค่า staff/ads/other ที่กรอกจะถูกเมินถ้าไม่ได้เปิดโหมดก้อนรายเดือน (กันหักซ้ำกับที่เฉลี่ยต่อชิ้น) */
+  function monthlyPL(products, channels, settings, expenses, month) {
+    var t = { month: month, rows: 0, qty: 0, revenue: 0, vat: 0, gpFee: 0, cost: 0, shipping: 0, box: 0, perUnitOther: 0,
+              gross: 0, overheads: [], overheadTotal: 0, net: 0, margin: 0 };
+    products.forEach(function (p) {
+      channels.forEach(function (c) {
+        var r = calcProduct(p, c, settings, month);
+        if (!r || r.qty === null) return;
+        var q = r.qty, extra = r.extras.reduce(function (a, e) { return a + e.amt; }, 0);
+        t.rows++; t.qty += q; t.revenue += r.price * q; t.vat += r.vat * q; t.gpFee += r.gpFee * q;
+        t.cost += r.cost * q; t.shipping += r.shipping * q; t.box += r.box * q; t.perUnitOther += (r.staff + r.ads + r.other + extra) * q;
+      });
+    });
+    t.gross = t.revenue - t.vat - t.gpFee - t.cost - t.shipping - t.box - t.perUnitOther;
+    var e = (expenses && expenses[month]) || {};
+    // เดือนที่ไม่มีทั้งยอดขายและค่าใช้จ่ายที่กรอก = เดือนว่าง ไม่หักค่าเริ่มต้น (ไม่ให้เดือนที่ยังไม่มีข้อมูลดูขาดทุน)
+    var active = t.rows > 0 || Object.keys(e).length > 0;
+    if (active && settings.monthlyAsLump === true) {
+      ['staff', 'ads', 'other'].forEach(function (k) {
+        var x = settings[k];
+        if (!x || x.mode !== 'perMonth') return;
+        var entered = e[k] !== undefined && e[k] !== null, amount = entered ? e[k] : x.amount;
+        if (amount || entered) t.overheads.push({ key: k, label: OVERHEAD_LABELS[k], amount: amount, source: entered ? 'entered' : 'default' });
+      });
+    }
+    (e.extras || []).forEach(function (x, i) { t.overheads.push({ key: 'x' + i, label: x.name || 'ค่าใช้จ่ายอื่นของเดือน', amount: x.amt, source: 'entered' }); });
+    t.overheadTotal = t.overheads.reduce(function (a, o) { return a + o.amount; }, 0);
+    t.net = t.gross - t.overheadTotal;
+    t.profit = t.net; // ชื่อเดิม ใช้ในตารางสรุป
+    t.margin = t.revenue > 0 ? t.net / t.revenue * 100 : 0;
+    return t;
+  }
+
+  /* สรุปรายเดือน: คืนงบของทุกเดือนที่มีจำนวนที่ขายได้หรือมีค่าใช้จ่ายที่กรอก เดือนล่าสุดก่อน */
+  function monthlyTotals(products, channels, settings, expenses) {
     var months = {};
     products.forEach(function (p) { Object.keys(p.sold || {}).forEach(function (m) { months[m] = 1; }); });
-    return Object.keys(months).sort().reverse().map(function (m) {
-      var t = { month: m, rows: 0, qty: 0, revenue: 0, profit: 0, margin: 0 };
-      products.forEach(function (p) {
-        channels.forEach(function (c) {
-          var r = calcProduct(p, c, settings, m);
-          if (r && r.qty !== null) { t.rows++; t.qty += r.qty; t.revenue += r.revenue; t.profit += r.totalProfit; }
-        });
+    Object.keys(expenses || {}).forEach(function (m) { months[m] = 1; });
+    return Object.keys(months).sort().reverse().map(function (m) { return monthlyPL(products, channels, settings, expenses, m); });
+  }
+
+  /* รวมงบหลายเดือนเป็นงบเดียว (สำหรับมุมมอง "ทุกเดือนรวมกัน") ค่าใช้จ่ายก้อนรวมตามชื่อรายการ */
+  function sumPL(list) {
+    var t = { month: 'all', rows: 0, qty: 0, revenue: 0, vat: 0, gpFee: 0, cost: 0, shipping: 0, box: 0, perUnitOther: 0, gross: 0, overheads: [], overheadTotal: 0, net: 0, margin: 0 };
+    var byKey = {}, order = [];
+    list.forEach(function (m) {
+      ['rows', 'qty', 'revenue', 'vat', 'gpFee', 'cost', 'shipping', 'box', 'perUnitOther', 'gross'].forEach(function (k) { t[k] += m[k]; });
+      m.overheads.forEach(function (o) {
+        var key = o.key.charAt(0) === 'x' ? 'x:' + o.label : o.key;
+        if (!byKey[key]) { byKey[key] = { key: key, label: o.label, amount: 0, source: 'sum' }; order.push(key); }
+        byKey[key].amount += o.amount;
       });
-      t.margin = t.revenue > 0 ? t.profit / t.revenue * 100 : 0;
-      return t;
     });
+    t.overheads = order.map(function (k) { return byKey[k]; });
+    t.overheadTotal = t.overheads.reduce(function (a, o) { return a + o.amount; }, 0);
+    t.net = t.gross - t.overheadTotal; t.profit = t.net;
+    t.margin = t.revenue > 0 ? t.net / t.revenue * 100 : 0;
+    return t;
+  }
+
+  /* งบของช่วงที่เลือก: 'YYYY-MM' = เดือนนั้น, 'all' = รวมทุกเดือนที่มีข้อมูล */
+  function periodPL(products, channels, settings, expenses, period) {
+    if (period && period !== 'all') return monthlyPL(products, channels, settings, expenses, period);
+    return sumPL(monthlyTotals(products, channels, settings, expenses));
   }
 
   /* สถานะกำไร: 'loss' (ขาดทุน) | 'thin' (% กำไรต่ำกว่า thin) | 'ok' */
@@ -169,5 +232,5 @@
     return w;
   }
 
-  return { VAT_RATE: VAT_RATE, warnings: warnings, round2: round2, parseMoney: parseMoney, overheadPerUnit: overheadPerUnit, calcProduct: calcProduct, calcAll: calcAll, soldQty: soldQty, monthlyTotals: monthlyTotals, status: status, summarize: summarize, breakdown: breakdown };
+  return { VAT_RATE: VAT_RATE, warnings: warnings, round2: round2, parseMoney: parseMoney, overheadPerUnit: overheadPerUnit, calcProduct: calcProduct, calcAll: calcAll, soldQty: soldQty, monthlyPL: monthlyPL, monthlyTotals: monthlyTotals, sumPL: sumPL, periodPL: periodPL, status: status, summarize: summarize, breakdown: breakdown };
 });

@@ -29,7 +29,7 @@ var M0 = ym(0), M1 = ym(-1); // เดือนนี้ และเดือ�
 window.COSTCALC_DEMO = {
   version: 1,
   settings: { vatOn: true, monthlyUnits: 150, thinMargin: 10,
-    staff: { amount: 5, mode: 'perUnit' }, ads: { amount: 20, mode: 'perUnit' }, other: { amount: 0, mode: 'perUnit' } },
+    staff: { amount: 5, mode: 'perUnit' }, ads: { amount: 3000, mode: 'perMonth' }, other: { amount: 0, mode: 'perUnit' }, monthlyAsLump: true },
   channels: [{ id: 'fb', name: 'Facebook', gp: 0 }, { id: 'sp', name: 'Shopee', gp: 10 }, { id: 'ln', name: 'Line', gp: 0 }],
   products: [
     { id: 'p1', name: 'เสื้อ A', cost: 120, shipping: 35, box: 8, prices: { fb: 299, sp: 299, ln: 280 }, sold: { [M0]: { fb: 120, sp: 80, ln: 20 }, [M1]: { fb: 100, sp: 60, ln: 10 } } },
@@ -38,7 +38,9 @@ window.COSTCALC_DEMO = {
     { id: 'p4', name: 'หมวก D', cost: 60, shipping: 25, box: 5, ads: 10, extras: [{ name: 'ค่าถุงซิป', amt: 2 }],
       prices: { fb: 149, sp: 159, ln: 139 }, actual: { sp: 149 }, sold: { [M0]: { fb: 60, sp: 90, ln: 25 }, [M1]: { fb: 50, sp: 70, ln: 15 } }, note: 'ซัพ X สีดำ' },
     { id: 'p5', name: 'ถุงเท้า E', cost: 25, shipping: 15, box: 3, prices: { fb: 59, sp: 59 }, sold: { [M0]: { fb: 200, sp: 150 }, [M1]: { fb: 150, sp: 100 } } }
-  ]
+  ],
+  // ค่าใช้จ่ายจริงที่กรอกของเดือนก่อน (เดือนนี้ยังไม่กรอก ใช้ค่าแอดที่ตั้งไว้ 3,000 เป็นค่าเริ่มต้น)
+  expenses: { [M1]: { ads: 5200, extras: [{ name: 'ค่าเช่าร้าน', amt: 3000 }] } }
 };
 </script>
 <script src="calc.js"></script>

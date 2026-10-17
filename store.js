@@ -21,6 +21,7 @@
         vatOn: true,
         monthlyUnits: 100,
         thinMargin: DEFAULT_THIN,
+        monthlyAsLump: true, // ค่าที่ตั้งเป็น "ยอดต่อเดือน" เป็นก้อนรายเดือน หักทีเดียวต่อเดือนในงบกำไร-ขาดทุน ไม่เฉลี่ยลงต่อชิ้น
         staff: { amount: 0, mode: 'perUnit' },
         ads: { amount: 0, mode: 'perUnit' },
         other: { amount: 0, mode: 'perUnit' }
@@ -31,7 +32,8 @@
         { id: 'sp', name: 'Shopee', gp: 0 },
         { id: 'ln', name: 'Line', gp: 0 }
       ],
-      products: []
+      products: [],
+      expenses: {} // ค่าใช้จ่ายจริงของแต่ละเดือน { 'YYYY-MM': { staff?, ads?, other?, extras?: [{name, amt}] } }
     };
   }
 
@@ -48,6 +50,19 @@
     if (sold === undefined) return true;
     if (!sold || typeof sold !== 'object' || Array.isArray(sold)) return false;
     return Object.keys(sold).every(function (m) { return MONTH_RE.test(m) && sold[m] && typeof sold[m] === 'object' && !Array.isArray(sold[m]) && isMoneyMap(sold[m], ids); });
+  }
+
+  /* ค่าใช้จ่ายจริงรายเดือน: { 'YYYY-MM': { staff?, ads?, other?, extras?: [{ name, amt }] } } จำนวนเงิน >= 0 */
+  function isExpensesMap(ex) {
+    if (ex === undefined) return true;
+    if (!ex || typeof ex !== 'object' || Array.isArray(ex)) return false;
+    return Object.keys(ex).every(function (m) {
+      var e = ex[m];
+      if (!MONTH_RE.test(m) || !e || typeof e !== 'object' || Array.isArray(e)) return false;
+      if (['staff', 'ads', 'other'].some(function (k) { return e[k] !== undefined && !isNum(e[k]); })) return false;
+      if (e.extras !== undefined && (!Array.isArray(e.extras) || !e.extras.every(function (x) { return x && typeof x.name === 'string' && isNum(x.amt); }))) return false;
+      return true;
+    });
   }
 
   function currentMonth() {
@@ -87,6 +102,8 @@
     var s = d.settings;
     if (typeof s.vatOn !== 'boolean' || !(s.monthlyUnits > 0) || !isOverhead(s.staff) || !isOverhead(s.ads) || !isOverhead(s.other)) return false;
     if (s.thinMargin !== undefined && (!isNum(s.thinMargin) || s.thinMargin > 100)) return false;
+    if (s.monthlyAsLump !== undefined && typeof s.monthlyAsLump !== 'boolean') return false;
+    if (!isExpensesMap(d.expenses)) return false;
     if (d.channels.length < 1) return false;
     var ids = {};
     var chOk = d.channels.every(function (c) {
@@ -104,6 +121,9 @@
   /* ข้อมูลเวอร์ชันแรก ๆ ที่ยังไม่มี thinMargin เติมให้ */
   function normalize(d) {
     if (d.settings.thinMargin === undefined) d.settings.thinMargin = DEFAULT_THIN;
+    if (d.settings.monthlyAsLump === undefined) d.settings.monthlyAsLump = true;
+    delete d.settings.divideByActual; // ตัวเลือกรุ่นก่อนที่เลิกใช้แล้ว (เคยหารด้วยยอดขายจริง) ไม่ใช้ ทิ้ง
+    if (d.expenses === undefined) d.expenses = {};
     return d;
   }
 
@@ -196,7 +216,7 @@
     var s = data.settings;
     function o(x) { return { amount: String(x.amount), mode: x.mode }; }
     return {
-      vatOn: s.vatOn, monthlyUnits: String(s.monthlyUnits), thinMargin: String(s.thinMargin === undefined ? DEFAULT_THIN : s.thinMargin),
+      vatOn: s.vatOn, monthlyAsLump: s.monthlyAsLump !== false, monthlyUnits: String(s.monthlyUnits), thinMargin: String(s.thinMargin === undefined ? DEFAULT_THIN : s.thinMargin),
       staff: o(s.staff), ads: o(s.ads), other: o(s.other),
       channels: data.channels.map(function (c) { return { id: c.id, name: c.name, gp: String(c.gp) }; })
     };
@@ -220,7 +240,7 @@
       channels.push({ id: c.id, name: name, gp: gp });
     });
 
-    var settings = { vatOn: !!form.vatOn };
+    var settings = { vatOn: !!form.vatOn, monthlyAsLump: form.monthlyAsLump !== false };
     ['staff', 'ads', 'other'].forEach(function (k) {
       var amt = Calc.parseMoney(form[k].amount); // ว่าง = 0
       if (Number.isNaN(amt)) errors[k + '.amount'] = MONEY_ERR;
@@ -327,9 +347,44 @@
     return { ok: ok, errors: errors, clean: ok ? clean : null };
   }
 
+  /* ---------- ค่าใช้จ่ายจริงรายเดือน ---------- */
+  function expenseToForm(expenses, month) {
+    var e = (expenses && expenses[month]) || {};
+    var f = { month: month, staff: '', ads: '', other: '', extras: [] };
+    ['staff', 'ads', 'other'].forEach(function (k) { if (e[k] !== undefined) f[k] = String(e[k]); });
+    f.extras = (e.extras || []).map(function (x) { return { name: x.name, amt: String(x.amt) }; });
+    return f;
+  }
+  /* คีย์ error: staff ads other x.<i>.amt   ช่องว่าง = ไม่กรอก (ใช้ค่าที่ตั้งไว้) 0 = ตั้งใจว่าไม่มีค่าใช้จ่ายนี้เดือนนี้
+   * clean = { staff?, ads?, other?, extras? } (ว่างทั้งหมด = {} แปลว่าลบข้อมูลเดือนนั้น) */
+  function validateExpenseForm(form) {
+    var errors = {}, clean = {}, P = Calc.parseMoney;
+    ['staff', 'ads', 'other'].forEach(function (k) {
+      var v = P(form[k]);
+      if (Number.isNaN(v)) errors[k] = MONEY_ERR; else if (v !== null) clean[k] = v;
+    });
+    var extras = [];
+    form.extras.forEach(function (x, i) {
+      var name = String(x.name).trim(), amt = P(x.amt);
+      if (name === '' && amt === null) return;
+      if (amt === null) errors['x.' + i + '.amt'] = 'ใส่จำนวนเงิน';
+      else if (Number.isNaN(amt)) errors['x.' + i + '.amt'] = MONEY_ERR;
+      else extras.push({ name: name, amt: amt });
+    });
+    if (extras.length) clean.extras = extras;
+    var ok = Object.keys(errors).length === 0;
+    return { ok: ok, errors: errors, clean: ok ? clean : null };
+  }
+  /* ตั้งค่าใช้จ่ายของเดือน (clean ว่าง = ลบเดือนนั้น) คืนข้อมูลใหม่ ไม่แก้ของเดิม */
+  function setExpenses(data, month, clean) {
+    var ex = Object.assign({}, data.expenses || {});
+    if (clean && Object.keys(clean).length) ex[month] = clean; else delete ex[month];
+    return Object.assign({}, data, { expenses: ex });
+  }
+
   /* ---------- สำรอง/นำเข้า ---------- */
   function exportJSON(data) {
-    return JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), settings: data.settings, channels: data.channels, products: data.products }, null, 2);
+    return JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), settings: data.settings, channels: data.channels, products: data.products, expenses: data.expenses || {} }, null, 2);
   }
   /* คืน { ok:true, data } หรือ { ok:false, error:'json'|'shape' } เก็บเฉพาะฟิลด์ที่รู้จัก ไม่เชื่อค่าแปลกปลอมในไฟล์ */
   function parseImport(text) {
@@ -337,7 +392,7 @@
     try { o = JSON.parse(text); } catch (e) { return { ok: false, error: 'json' }; }
     if (!o || typeof o !== 'object') return { ok: false, error: 'shape' };
     try { migrate(o); } catch (e) { /* โครงพัง ให้การตรวจข้อมูลปฏิเสธ */ }
-    var data = { version: o.version, settings: o.settings, channels: o.channels, products: o.products };
+    var data = { version: o.version, settings: o.settings, channels: o.channels, products: o.products, expenses: o.expenses };
     if (!isValidData(data)) return { ok: false, error: 'shape' };
     return { ok: true, data: normalize(JSON.parse(JSON.stringify(data))) };
   }
@@ -346,6 +401,7 @@
     KEY: KEY, BACKUP_KEY: BACKUP_KEY, MONTH_RE: MONTH_RE, currentMonth: currentMonth, migrate: migrate, DEFAULT_THIN: DEFAULT_THIN, defaults: defaults, isValidData: isValidData, isValidProduct: isValidProduct, createStore: createStore,
     channelInUse: channelInUse, newChannelId: newChannelId, newProductId: newProductId, pruneChannels: pruneChannels,
     upsertProduct: upsertProduct, deleteProduct: deleteProduct,
+    expenseToForm: expenseToForm, validateExpenseForm: validateExpenseForm, setExpenses: setExpenses, isExpensesMap: isExpensesMap,
     toForm: toForm, validateForm: validateForm, blankProductForm: blankProductForm, productToForm: productToForm, validateProductForm: validateProductForm,
     exportJSON: exportJSON, parseImport: parseImport
   };
