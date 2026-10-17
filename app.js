@@ -5,8 +5,9 @@
 
   var esc = function (s) { return String(s).replace(/[&<>"']/g, function (m) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]; }); };
   var money = function (n) { return (n < 0 ? '-' : '') + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
-  var pct = function (n) { return (n < 0 ? '-' : '') + Math.abs(n).toFixed(2) + '%'; };
+  var pct = function (n) { return n < -999 ? 'ต่ำกว่า -999%' : n > 999 ? 'เกิน 999%' : (n < 0 ? '-' : '') + Math.abs(n).toFixed(2) + '%'; };
   var cls = function (n) { return n < 0 ? 'neg' : ''; };
+  var pct1 = function (n) { return n < -999 ? 'ต่ำกว่า -999%' : n > 999 ? 'เกิน 999%' : n.toFixed(1) + '%'; };
   var qf = function (n) { return n.toLocaleString('en-US', { maximumFractionDigits: 2 }); };
   var $ = function (id) { return document.getElementById(id); };
   var disc = function (r) { return r.list ? (r.price < r.list ? 'ลด ' : 'สูงกว่า ') + Math.abs((r.list - r.price) / r.list * 100).toFixed(0) + '%' : ''; };
@@ -86,6 +87,31 @@
     var allZero = state.data.channels.every(function (c) { return c.gp === 0; });
     return allZero ? '<div class="hint warn">ค่า GP ทุกช่องทางยังเป็น 0 กำไรที่เห็นยังไม่หักค่าธรรมเนียมแพลตฟอร์ม <a href="#set">ไปใส่ค่า GP ในหน้าตั้งค่า</a></div>' : '';
   }
+  /* ข้อความเตือนตัวเลขที่น่าจะพิมพ์ผิด (รหัสมาจาก Calc.warnings) */
+  function warnBox(r) {
+    var w = Calc.warnings(r);
+    if (!w.length) return '';
+    return '<div class="lwarn"><b>ตรวจตัวเลขอีกที:</b> ต้นทุนรวม ' + money(r.costs) + ' บาท สูงกว่าราคาขาย ' + money(r.price) + ' บาท หลายเท่า อาจพิมพ์ตัวเลขเกินโดยไม่ได้ตั้งใจ (เช่น ต้นทุน 120 แต่พิมพ์ 120000)</div>';
+  }
+  /* ผลลัพธ์ 1 ช่องทาง อ่านเป็นลำดับ: ราคาขาย -> หักอะไรบ้าง -> ได้กำไรเท่าไร -> ถ้าใส่จำนวนที่ขายได้ ยอดรวม */
+  function liveCard(c, r) {
+    var row = function (label, val, note, cl) { return '<div class="lv"><span>' + label + (note ? ' <small>' + note + '</small>' : '') + '</span><span class="num ' + (cl || '') + '">' + val + '</span></div>'; };
+    var html = '<div class="res"><div class="h"><span>' + esc(c.name) + '</span>' + zone(r) + '</div>' +
+      '<div class="lvt">ขาย 1 ชิ้น</div>' +
+      row('ราคาขาย', money(r.price), r.list ? 'ราคาตั้ง ' + money(r.list) + ' (' + disc(r) + ')' : '') +
+      row('หัก ต้นทุนรวม', money(r.costs), 'สินค้า+ขนส่ง+กล่อง+พนักงาน+แอด+อื่น ๆ') +
+      row('หัก VAT', money(r.vat), r.vatOn ? '7% ที่รวมในราคา' : 'ปิดอยู่') +
+      row('หัก ค่า GP ' + c.gp + '%', money(r.gpFee)) +
+      '<div class="lv total"><span>' + (r.profit < 0 ? 'ขาดทุนต่อชิ้น' : 'กำไรต่อชิ้น') + '</span><b class="num ' + cls(r.profit) + '">' + money(r.profit) + '</b></div>' +
+      '<div class="sub">' + (r.margin > -1000 && r.margin < 1000 ? 'คิดเป็น ' + pct(r.margin) + ' ของราคาขาย · ' : '') +
+      (r.breakEven === null ? 'ราคาต่ำสุดที่ไม่ขาดทุน: คำนวณไม่ได้ ตรวจค่า GP' : 'ต้องขายอย่างน้อย ' + money(r.breakEven) + ' บาท ถึงจะไม่ขาดทุน') + '</div>';
+    if (r.qty !== null) {
+      html += '<div class="lvt">ขายได้ ' + qf(r.qty) + ' ชิ้น</div>' +
+        row('ยอดขายรวม', money(r.revenue), 'ราคาขาย x จำนวน') +
+        '<div class="lv total"><span>' + (r.totalProfit < 0 ? 'ขาดทุนรวม' : 'กำไรรวม') + '</span><b class="num ' + cls(r.totalProfit) + '">' + money(r.totalProfit) + '</b></div>';
+    }
+    return html + warnBox(r) + '</div>';
+  }
   function zone(r) {
     var s = Calc.status(r, state.data.settings.thinMargin);
     return s === 'loss' ? '<span class="zone danger">ขาดทุน</span>' : s === 'thin' ? '<span class="zone warn">กำไรบาง</span>' : '<span class="zone safe">ปกติ</span>';
@@ -159,11 +185,11 @@
         '<div>กำไรรวม<b class="num ' + cls(r.totalProfit) + '">' + money(r.totalProfit) + '</b></div></div>' +
         '<p class="small muted" style="margin-top:8px">ยอดขายรวม = ราคาขายจริง x จำนวน, กำไรรวม = กำไรต่อชิ้น x จำนวน (เปลี่ยนช่องทางที่แท็บด้านบน)</p></div>';
     var bk = Calc.breakdown(r).map(function (x) {
-      return '<div class="bk"><span>' + esc(x.label) + '</span><div class="bar"><span style="width:' + Math.min(100, r.price ? x.amount / r.price * 100 : 0) + '%"></span></div><span class="r num">' + money(x.amount) + '</span><span class="pct r num">' + (r.price ? (x.amount / r.price * 100).toFixed(1) : '0.0') + '%</span></div>';
+      return '<div class="bk"><span>' + esc(x.label) + '</span><div class="bar"><span style="width:' + Math.min(100, r.price ? x.amount / r.price * 100 : 0) + '%"></span></div><span class="r num">' + money(x.amount) + '</span><span class="pct r num">' + (r.price ? pct1(x.amount / r.price * 100) : '0.0%') + '</span></div>';
     }).join('') +
-      '<div class="bk ' + (r.profit < 0 ? 'loss' : 'profit') + '"><b>' + (r.profit < 0 ? 'ขาดทุน' : 'กำไร') + '</b><div class="bar"><span style="width:' + Math.min(100, r.price ? Math.abs(r.profit) / r.price * 100 : 0) + '%"></span></div><b class="r num ' + cls(r.profit) + '">' + money(r.profit) + '</b><span class="pct r num">' + (r.price ? (r.profit / r.price * 100).toFixed(1) : '0.0') + '%</span></div>' +
+      '<div class="bk ' + (r.profit < 0 ? 'loss' : 'profit') + '"><b>' + (r.profit < 0 ? 'ขาดทุน' : 'กำไร') + '</b><div class="bar"><span style="width:' + Math.min(100, r.price ? Math.abs(r.profit) / r.price * 100 : 0) + '%"></span></div><b class="r num ' + cls(r.profit) + '">' + money(r.profit) + '</b><span class="pct r num">' + (r.price ? pct1(r.profit / r.price * 100) : '0.0%') + '</span></div>' +
       '<div class="bk total"><span>ราคาขายจริง</span><span></span><span class="r num">' + money(r.price) + '</span><span class="pct r num">100%</span></div>';
-    return head + gpWarn() +
+    return head + gpWarn() + (warnBox(r) ? '<div style="margin-bottom:16px">' + warnBox(r) + '</div>' : '') +
       '<div class="card" style="margin-bottom:16px"><h3>ข้อมูลที่กรอก</h3><div class="kv"><div>ต้นทุนสินค้า<b class="num">' + money(p.cost) + '</b></div><div>ค่าขนส่ง<b class="num">' + money(p.shipping) + '</b></div><div>ค่ากล่อง<b class="num">' + money(p.box) + '</b></div>' +
       '<div>ค่าพนักงาน<b class="num">' + eff('staff', r.staff) + '</b></div><div>ค่าแอด<b class="num">' + eff('ads', r.ads) + '</b></div><div>ค่าอื่น ๆ<b class="num">' + eff('other', r.other) + '</b></div>' +
       (p.extras || []).map(function (e) { return '<div>' + esc(e.name || 'ค่าใช้จ่ายเพิ่มเติม') + '<b class="num">' + money(e.amt) + '</b></div>'; }).join('') + '</div></div>' +
@@ -242,12 +268,7 @@
     live.innerHTML = state.data.channels.map(function (c) {
       var r = calcFor(v2.clean, c);
       if (!r) return '<div class="res"><div class="h"><span>' + esc(c.name) + '</span><span class="zone gray">ไม่ได้ขาย</span></div></div>';
-      return '<div class="res"><div class="h"><span>' + esc(c.name) + ' · GP ' + c.gp + '%</span>' + zone(r) + '</div>' +
-        '<div class="big num ' + cls(r.profit) + '">' + money(r.profit) + ' <span class="small muted" style="font-weight:400;font-family:Anuphan">บาท/ชิ้น</span></div>' +
-        (r.list ? '<div class="sub num">ราคาตั้ง ' + money(r.list) + ' · ขายจริง ' + money(r.price) + ' (' + disc(r) + ')</div>' : '') +
-        '<div class="sub num">กำไร ' + pct(r.margin) + ' · ต้นทุนรวม ' + money(r.costs) + ' · VAT ' + money(r.vat) + ' · GP ' + money(r.gpFee) + '</div>' +
-        '<div class="sub num">ราคาขั้นต่ำที่ไม่ขาดทุน ' + (r.breakEven === null ? 'คำนวณไม่ได้ ตรวจค่า GP' : money(r.breakEven)) + '</div>' +
-        (r.qty === null ? '' : '<div class="sub num" style="color:rgb(var(--ink))">ขายได้ ' + qf(r.qty) + ' ชิ้น · ยอดขาย <b>' + money(r.revenue) + '</b> · กำไรรวม <b class="' + cls(r.totalProfit) + '">' + money(r.totalProfit) + '</b></div>') + '</div>';
+      return liveCard(c, r);
     }).join('');
   }
 

@@ -125,5 +125,13 @@
     return rows;
   }
 
-  return { VAT_RATE: VAT_RATE, round2: round2, parseMoney: parseMoney, overheadPerUnit: overheadPerUnit, calcProduct: calcProduct, calcAll: calcAll, status: status, summarize: summarize, breakdown: breakdown };
+  /* คำเตือนตัวเลขที่น่าจะพิมพ์ผิด คืนรหัสคำเตือน (ข้อความภาษาไทยอยู่ที่หน้าจอ)
+   * 'costs-far-above-price': ต้นทุนรวมสูงกว่าราคาขายตั้งแต่ 3 เท่าขึ้นไป (เช่น ต้นทุน 120 แต่พิมพ์ 120000) */
+  function warnings(r) {
+    var w = [];
+    if (r.price > 0 && r.costs >= 3 * r.price) w.push('costs-far-above-price');
+    return w;
+  }
+
+  return { VAT_RATE: VAT_RATE, warnings: warnings, round2: round2, parseMoney: parseMoney, overheadPerUnit: overheadPerUnit, calcProduct: calcProduct, calcAll: calcAll, status: status, summarize: summarize, breakdown: breakdown };
 });
